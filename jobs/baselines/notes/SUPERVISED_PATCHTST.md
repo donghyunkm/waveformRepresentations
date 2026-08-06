@@ -4,7 +4,7 @@ This baseline uses the repository's standalone PatchTST comparison encoder
 (`PatchTFTSimple`), not the native PhysioJEPA encoder.
 
 The encoder is initialized from scratch with the architecture in
-`jobs/patchtst/train_patchtst.yaml`:
+`jobs/patchtst/configs/train_patchtst.yaml`:
 
 - ABP, ECG lead II, and PLETH;
 - 30-minute windows at 125 Hz;
@@ -56,15 +56,15 @@ configuration or Slurm script yet.
 Validate the compact model sequentially:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_compact260k_hypotension_smoke.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_compact260k_hypotension_smoke.sbatch
 ```
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_compact260k_hypotension_subset10.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_compact260k_hypotension_subset10.sbatch
 ```
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_compact260k_hypotension_full.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_compact260k_hypotension_full.sbatch
 ```
 
 Do not submit the subset before the smoke test succeeds, or the full job before
@@ -88,19 +88,19 @@ establishes memory use and throughput.
 Submit the smoke test:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_hypotension_smoke.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_hypotension_smoke.sbatch
 ```
 
 After it completes successfully, submit the 10% experiment:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_hypotension_subset10.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_hypotension_subset10.sbatch
 ```
 
 Only after reviewing the 10% runtime and metrics, submit the full experiment:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_hypotension_full.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_hypotension_full.sbatch
 ```
 
 Each Slurm script performs a real CUDA tensor-allocation preflight and uses

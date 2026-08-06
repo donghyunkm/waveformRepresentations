@@ -115,7 +115,7 @@ The fixed manifest and all three caches already exist and passed the strict
 integration check. Submit full training from the repository root:
 
 ```bash
-sbatch jobs/baselines/fcn_baseline_hypotension_paper.sbatch
+sbatch jobs/baselines/slurm/fcn_baseline_hypotension_paper.sbatch
 ```
 
 The A100 run is allowed up to 14 days. It selects the checkpoint with the best

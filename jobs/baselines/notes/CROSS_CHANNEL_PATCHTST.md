@@ -29,19 +29,19 @@ name and shape remains unchanged.
 Smoke test:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_cross_channel_hypotension_smoke.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_cross_channel_hypotension_smoke.sbatch
 ```
 
 Fixed 10% subject subset:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_cross_channel_hypotension_subset10.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_cross_channel_hypotension_subset10.sbatch
 ```
 
 Full fixed cohort:
 
 ```bash
-sbatch jobs/baselines/supervised_patchtst_cross_channel_hypotension_full.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_cross_channel_hypotension_full.sbatch
 ```
 
 The scripts are pinned to `a100-4041`, the A100 node that passed the prior CUDA

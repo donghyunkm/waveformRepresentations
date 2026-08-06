@@ -103,9 +103,9 @@ status and conclusions only.
 - Ran `nbdev_prepare` — regenerated `physiojepa/tokenizers.py` and
   `physiojepa/patchtst.py` with the new classes.
 - Created config:
-  `jobs/baselines/supervised_patchtst_multiscale_hypotension_full.yaml`
+  `jobs/baselines/configs/supervised_patchtst_multiscale_hypotension_full.yaml`
 - Created sbatch:
-  `jobs/baselines/supervised_patchtst_multiscale_hypotension_full.sbatch`
+  `jobs/baselines/slurm/supervised_patchtst_multiscale_hypotension_full.sbatch`
   (a100_short, 3 days, 1×A100, 16 CPUs, 128G RAM).
 - Submitted job **26165312** (`physiojepa-sptst-multiscale`).
 
@@ -212,7 +212,7 @@ cd /gpfs/home/dk5565/PhysioJEPA
 
 ### Resubmit multi-scale job if preempted/expired
 ```bash
-sbatch jobs/baselines/supervised_patchtst_multiscale_hypotension_full.sbatch
+sbatch jobs/baselines/slurm/supervised_patchtst_multiscale_hypotension_full.sbatch
 ```
 
 ### Cancel a job
