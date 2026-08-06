@@ -1,0 +1,107 @@
+# Canonical single-network InceptionTime on the fixed 10% subject subset.
+
+run_config:
+  model_type: "inceptiontime"
+  wandb_project: "Hypotension Supervised Baselines"
+  model_run: "canonical-nf32-fixed-subset10-v1"
+  name: "inceptiontime_hypotension_subset10"
+  random_state: 16
+  precision: "32-true"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-08-03-inceptiontime-canonical-nf32-fixed-subset10-v1"
+  checkpoint_interval_minutes: 30
+
+paths:
+  data_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/containers"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/inceptiontime_hypotension_subset10"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_subset10"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_subset10_v1.csv"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_subset10_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  win_length: 125
+  overlap: 0.0
+  constant_nan_tolerance: 0.2
+  y_padding_mask: -100
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: true
+  infer_forecast_windows: false
+
+arch:
+  c_in: 3
+  c_out: 1
+  nf: 32
+  residual: true
+  depth: 6
+  kernel_size: 40
+  bottleneck: true
+
+training:
+  batch_size: 16
+  epochs: 20
+  n_gpus: 1
+  num_workers: 16
+  sample_generation_workers: 16
+  require_precomputed_samples: true
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  loss_fxn: "CrossEntropy"
+  fine_tune: true
+  label_smoothing: 0.0
+  gamma: 2.0
+  perform_cv: false
+  mixup: true
+  mixup_alpha: 0.2
+  use_class_weights: true
+
+optimizer:
+  learning_rate: 0.00004
+  weight_decay: 0.0
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.0
+  optimizer_type: "adam"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.001
+  div_factor: 25
+  final_div_factor: 100
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+cohort_validation:
+  strict_cohort_match: true
+  expected_cohort:
+    train:
+      positive_events: 4363
+      negative_events: 98072
+      icu_stays: 321
+      patients: 201
+    val:
+      positive_events: 560
+      negative_events: 12450
+      icu_stays: 40
+      patients: 26
+    test:
+      positive_events: 557
+      negative_events: 12418
+      icu_stays: 41
+      patients: 26
+
+evaluation:
+  paper_metrics: true
+  bootstrap_resamples: 1000
+  bootstrap_seed: 16

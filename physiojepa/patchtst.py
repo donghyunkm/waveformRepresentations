@@ -10,7 +10,7 @@ import torch, torch.nn as nn, torch.nn.functional as F, lightning.pytorch as pl,
 from typing import Optional
 from torch import Tensor
 from .layers import Patch, MultiHeadAttention, get_activation_fn, tAPE, PositionalEncoding, PatchAugmentations
-from .tokenizers import TS_Tokenizer, TS_Tokenizer_Complex, InceptionTokenizer, PatchEncoder
+from .tokenizers import TS_Tokenizer, TS_Tokenizer_Complex, InceptionTokenizer, PatchEncoder, MultiScaleTokenizer
 from .utils import trunc_normal_
 from .augmentations import unpatch
 from .loss import cosine_similarity_loss, mse_loss, mae_loss, huber_loss, mse_variance_loss
@@ -211,8 +211,16 @@ class PatchTFTSimple(nn.Module):
                                                   shared_embedding=self.shared_embedding,
                                                   **tokenizer_kwargs
                                                   )
+          elif self.tokenizer_type == 'multiscale':
+               self.tokenizer = MultiScaleTokenizer(c_in=c_in,
+                                                   patch_size=patch_size,
+                                                   d_model=d_model * c_in if not shared_embedding else d_model,
+                                                   patch_stride=patch_stride,
+                                                   shared_embedding=self.shared_embedding,
+                                                   **tokenizer_kwargs
+                                                   )
           else:
-               raise ValueError(f"Invalid tokenizer type: {tokenizer_type}. Valid options are: 'simple_conv', 'complex_conv', 'linear'")
+               raise ValueError(f"Invalid tokenizer type: {tokenizer_type}. Valid options are: 'simple_conv', 'complex_conv', 'linear', 'inception', 'multiscale'")
           # Positional Encoding
           if self.pe_type == 'tape':
                self.pe = tAPE(d_model=self.d_model, seq_len=self.num_patches)

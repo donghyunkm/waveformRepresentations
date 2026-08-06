@@ -1,0 +1,86 @@
+# GPU smoke test for the frozen native-JEPA hypotension probe.
+
+run_config:
+  model_type: "native_jepa_hypotension_probe"
+  wandb_project: "Hypotension JEPA Prediction"
+  model_run: "paper-smoke-fixed-v1"
+  name: "native_jepa_attentive_probe_smoke_fixed_v1"
+  random_state: 16
+  precision: "bf16-mixed"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: false
+  run_subdir: "2026-08-03-native-jepa-hypotension-probe-smoke-fixed-v1"
+  checkpoint_interval_minutes: 10
+
+paths:
+  pretrained_encoder_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_paper/2026-08-03-native-jepa-paper-full-fixed-v1/last.ckpt"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_hypotension_probe_smoke"
+  predictions_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/predictions/jepa_native_hypotension_probe_smoke"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  constant_nan_tolerance: 0.2
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: true
+  infer_forecast_windows: false
+
+lp_head:
+  num_heads: 4
+  mlp_ratio: 4.0
+  depth: 1
+  init_std: 0.02
+  qkv_bias: true
+  complete_block: true
+  affine: false
+
+training:
+  batch_size: 128
+  epochs: 1
+  n_gpus: 1
+  num_workers: 4
+  max_train_samples: 512
+  max_val_samples: 256
+  max_test_samples: 256
+  limit_train_batches: 2
+  limit_val_batches: 1
+  limit_predict_batches: 1
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  fine_tune: false
+  mixup: true
+  mixup_alpha: 0.2
+  use_class_weights: false
+  log_every_n_steps: 1
+  num_sanity_val_steps: 1
+
+optimizer:
+  learning_rate: 0.000001
+  weight_decay: 0.0001
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.4
+  optimizer_type: "AdamW"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.01
+  div_factor: 25
+  final_div_factor: 10000
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+evaluation:
+  run_predictions: true

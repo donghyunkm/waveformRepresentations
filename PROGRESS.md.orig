@@ -1,0 +1,132 @@
+# PhysioJEPA progress
+
+Last updated: 2026-08-05
+
+## 1. Changes made
+
+- Added root-level `MODEL_TEST_METRICS.md`, comparing completed test metrics
+  and independently selected validation AUROC/AP across the tracked model
+  families.
+- Recorded completed full-test results for FCN and supervised PatchTST in the
+  root comparison and the detailed baseline Markdown reports.
+- Added `jobs/jepa/resume_checkpoints.py` support for Lightning emergency
+  checkpoints named `hpc_ckpt_*.ckpt`, so wall-time signal checkpoints are
+  discoverable on restart.
+- Kept native JEPA resume enabled with 30-minute rolling checkpoints and
+  configuration-fingerprint validation.
+- Updated the two-GPU JEPA launch scripts to use `torchrun --standalone
+  --nproc_per_node=2` from a normal `sbatch` task (no `srun`).
+- Added node exclusions for the two nodes where two-GPU rank 1 failed during
+  CUDA setup.
+- Added `jobs/jepa/train_patch_jepa_1gpu_debug.sbatch`, which overrides the
+  training config to one GPU and uses a separate checkpoint directory.
+- Added this progress document. No commits or remote changes were made.
+
+## 2. Working
+
+- One-GPU JEPA training starts successfully on `a100_short` and sees
+  `CUDA_VISIBLE_DEVICES: [0]`.
+- Current job `26107011` is running on `a100-4013`. Last observed progress was
+  epoch 0, batch 401/2125 (~19%), at about 0.29 batches/sec.
+- The one-GPU run uses the complete indexed leakage-safe dataset: 272,068
+  training samples and 14,540 validation samples, with no sample limits.
+- The one-GPU trainer logs `SLURM auto-requeueing enabled` when submitted with
+  `--requeue --signal=B:SIGUSR1@180`.
+- Supervised baseline jobs remain active and are writing checkpoints/logs.
+- FCN full evaluation job `26027817` completed successfully and produced its
+  paper-style metrics JSON and prediction artifact.
+- Full supervised PatchTST evaluation completed and produced its prediction
+  artifact; its best logged validation AUROC/AP were 0.881/0.285.
+- FCN's best logged validation AUROC/AP were 0.869/0.345, selected
+  independently rather than from one jointly optimized checkpoint.
+- Completed FCN test metrics: AUROC 0.7903, average precision 0.1911,
+  accuracy 0.4523, F1 0.1242, recall 0.9037, specificity 0.4320.
+- Completed supervised PatchTST test metrics: AUROC 0.8688, average
+  precision 0.2766, accuracy 0.6702, F1 0.1851, recall 0.8713, specificity 0.6611.
+
+## 3. Unfinished
+
+- Native JEPA, ECG-JEPA, and self-supervised PatchTST do not yet have
+  completed downstream hypotension test metrics.
+- Cross-channel PatchTST, compact PatchTST, and compact InceptionTime have
+  only incomplete best-observed validation histories and no completed full-test
+  metric artifacts. Canonical InceptionTime has no paired validation metrics
+  recorded yet.
+- The two-GPU JEPA path has not completed a training step. It fails during
+  rank-1 CUDA device setup, even under `torchrun`, on multiple nodes.
+- The one-GPU run is only at epoch 0 and has not yet produced validation
+  metrics or its first 30-minute rolling checkpoint.
+- A full 100-epoch one-GPU run is estimated at roughly 8--9 days, so it must
+  span multiple 3-day short-partition allocations.
+
+## 4. Known bugs and caveats
+
+- Two-GPU JEPA rank 1 fails with `CUDA-capable device(s) is/are busy or
+  unavailable` on `a100-4029`, `a100-4003`, and the a100_dev debug attempt.
+  This is unresolved; do not assume the two-GPU path is usable.
+- Test comparisons must remain on the fixed 127,811-window subject split;
+  smoke and 10% subset values are not comparable full-test results.
+- Validation AUROC and average precision are tracked independently; their best
+  values may come from different epochs/checkpoints.
+- The one-GPU script is named `*_debug.sbatch` and has a 4-hour dev default.
+  Use the command-line partition/time/requeue overrides below for production
+  short-partition segments.
+- Checkpoint resume requires the same `run_subdir` and a compatible data/model
+  fingerprint. A partially written checkpoint may be rejected safely.
+- Existing repository caveats include the native JEPA unshared-channel
+  `apply_masks` training issue, the misspelled `loss.mape` clamp call,
+  attention masks not being passed through `MultiHeadAttention`, and the
+  lowercase-only optimizer comparison in `GeneralTimeSupervised`.
+
+## 5. Commands to continue
+
+Activate the prescribed environment:
+
+```bash
+source /gpfs/share/apps/anaconda3/gpu/2025.06/etc/profile.d/conda.sh
+conda activate physiojepa
+cd /gpfs/home/dk5565/PhysioJEPA
+```
+
+Check jobs and logs:
+
+```bash
+squeue -u dk5565
+tail -f /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/physiojepa-jepa-1gpu-short-26107011.out
+```
+
+Review the completed metrics and current job state:
+
+```bash
+sed -n '1,180p' MODEL_TEST_METRICS.md
+sacct -j 26107011 --format=JobID,JobName%28,State,ExitCode,Elapsed,End -n -P
+```
+
+Inspect FCN/PatchTST artifacts and reports:
+
+```bash
+cat /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper/2026-07-31-fcn-paper-replication-v1/hypotension_label-fcn_baseline_hypotension_paper-paper_metrics.json
+sed -n '100,145p' jobs/baselines/SUPERVISED_PATCHTST.md
+```
+Resubmit the one-GPU segment after walltime or failure. The fixed run
+subdirectory allows automatic checkpoint discovery:
+
+```bash
+sbatch \
+  --partition=a100_short \
+  --time=3-00:00:00 \
+  --requeue \
+  --signal=B:SIGUSR1@180 \
+  --job-name=physiojepa-jepa-1gpu-short \
+  jobs/jepa/train_patch_jepa_1gpu_debug.sbatch
+```
+
+Inspect which checkpoint would be available before restarting:
+
+```bash
+find /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_paper/2026-08-04-native-jepa-paper-1gpu-debug-v1 \
+  -maxdepth 1 -type f -printf '%TY-%Tm-%Td %TH:%TM:%TS|%s|%f\\n' | sort
+```
+
+Do not resubmit the two-GPU script until the rank-1 CUDA/device mapping issue
+has been diagnosed.

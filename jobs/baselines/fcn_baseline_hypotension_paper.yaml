@@ -1,0 +1,125 @@
+# Full MIMIC-III FCN hypotension replication.
+# Paper target: supervised convolutional AUROC 0.778 (95% CI 0.771-0.784).
+
+run_config:
+  model_type: "fcn"
+  wandb_project: "Hypotension Supervised Baselines"
+  model_run: "paper-replication-v1"
+  name: "fcn_baseline_hypotension_paper"
+  random_state: 16
+  precision: "32-true"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-07-31-fcn-paper-replication-v1"
+  checkpoint_interval_minutes: 30
+  initial_checkpoint_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper/2026-07-31-fcn-paper-replication-v1/last.ckpt"
+  allow_unverified_initial_checkpoint: true
+
+paths:
+  data_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/containers"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  win_length: 125
+  overlap: 0.0
+  constant_nan_tolerance: 0.2
+  y_padding_mask: -100
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: true
+  infer_forecast_windows: false
+
+arch:
+  c_in: 3
+  layers: [128, 256, 128]
+  kernel_sizes: [7, 5, 3]
+  n_classes: 1
+
+training:
+  batch_size: 16
+  epochs: 20
+  n_gpus: 1
+  num_workers: 16
+  sample_generation_workers: 16
+  require_precomputed_samples: true
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  loss_fxn: "CrossEntropy"
+  fine_tune: false
+  label_smoothing: 0.0
+  gamma: 2.0
+  perform_cv: false
+  mixup: true
+  mixup_alpha: 0.2
+  use_class_weights: true
+
+optimizer:
+  learning_rate: 0.00001
+  weight_decay: 0.001
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.4
+  optimizer_type: "adamw"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.00001
+  div_factor: 25
+  final_div_factor: 10000
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+paper_replication:
+  strict_cohort_match: false
+  expected_cohort:
+    train:
+      positive_events: 44897
+      negative_events: 1015429
+      icu_stays: 3280
+      patients: 2060
+    val:
+      positive_events: 5601
+      negative_events: 116307
+      icu_stays: 381
+      patients: 237
+    test:
+      positive_events: 4435
+      negative_events: 106273
+      icu_stays: 341
+      patients: 229
+
+cohort_validation:
+  strict_cohort_match: true
+  expected_cohort:
+    train:
+      positive_events: 43950
+      negative_events: 978613
+      icu_stays: 3195
+      patients: 2013
+    val:
+      positive_events: 5493
+      negative_events: 122338
+      icu_stays: 399
+      patients: 255
+    test:
+      positive_events: 5494
+      negative_events: 122317
+      icu_stays: 407
+      patients: 256
+
+evaluation:
+  paper_metrics: true
+  bootstrap_resamples: 1000
+  bootstrap_seed: 16

@@ -12,7 +12,7 @@ from pathlib import Path
 import datetime as dt
 
 from torch.utils.data import Dataset
-from .data_preprocessing import calculate_samples_mp, interpolate_nan_clip, calculate_samples_forecast_mp
+from .data_preprocessing import calculate_samples_mp, interpolate_nan_clip, calculate_samples_forecast_mp, open_zarr_group, close_zarr_group, zarr_record_name
 from .signal import butterworth, iqr_normalization, resample_waveform
 from scipy.ndimage import median_filter
 
@@ -53,7 +53,8 @@ class ForecastingDataset(Dataset):
                  require_all_channels=False, # indicator to require all channels to be present in the sample, if False, will return samples with any of the channels and 0s for the missing channels
                  infer_forecast_windows=True, # indicator to require all forecast windows to be present in the sample, if False, will return samples with any of the forecast windows and NAs for the missing forecast windows
                  normalize_signals=True, # indicator to normalize signals to 0 mean and unit variance
-                 sample_frequency_key='sampling_frequency'
+                 sample_frequency_key='sampling_frequency',
+                 sample_generation_workers=None # processes used when sample_df must be generated
                  ):
         self.channels = channels
         self.forecast_window_sec = [forecast_window_sec] if isinstance(forecast_window_sec, int) else forecast_window_sec
@@ -74,7 +75,7 @@ class ForecastingDataset(Dataset):
        
         if sample_df is None:
             print(f"Calculating samples with {sample_seq_len_sec} sec length using the outcome df with a forecast window of {forecast_window_sec} sec")
-            self.sample_df, _, removal_reasons = calculate_samples_forecast_mp(outcome_df=outcome_df, file_col=file_col, outcome_val_col=outcome_df_outcome_col, outcome_time_col=outcome_df_seconds_since_column, outcome_duration_col=outcome_df_duration_column, forecast_window_sec=forecast_window_sec, channels=channels, frequency=frequency, sample_seq_len_sec=sample_seq_len_sec, constant_nan_tolerance=constant_nan_tolerance, require_all_channels=require_all_channels, infer_forecast_windows=infer_forecast_windows, sample_frequency_key=sample_frequency_key)
+            self.sample_df, _, removal_reasons = calculate_samples_forecast_mp(outcome_df=outcome_df, file_col=file_col, outcome_val_col=outcome_df_outcome_col, outcome_time_col=outcome_df_seconds_since_column, outcome_duration_col=outcome_df_duration_column, forecast_window_sec=forecast_window_sec, channels=channels, frequency=frequency, sample_seq_len_sec=sample_seq_len_sec, constant_nan_tolerance=constant_nan_tolerance, require_all_channels=require_all_channels, infer_forecast_windows=infer_forecast_windows, sample_frequency_key=sample_frequency_key, n_processes=sample_generation_workers)
             self.removal_reasons = {REASON_CODES[k]:v for k,v in removal_reasons.items()}
             print("Samples removed due to the following reasons:")
             for k,v in self.removal_reasons.items():
@@ -88,8 +89,8 @@ class ForecastingDataset(Dataset):
         self.forecast_window_sec = forecast_window_sec if isinstance(forecast_window_sec, list) else [forecast_window_sec]
         self.sample_df_outcome_cols = [f'outcome_val_{f}sec' for f in self.forecast_window_sec]
 
-        self.sample_df[self.y_date_column] = self.sample_df[self.file_col].apply(lambda x: dt.datetime.strptime(Path(x).stem.split('-',  maxsplit=1)[1], '%Y-%m-%d-%H-%M'))
-        self.sample_df['subject_id'] = self.sample_df[self.file_col].apply(lambda x: Path(x).stem.split('-',  maxsplit=1)[0])
+        self.sample_df[self.y_date_column] = self.sample_df[self.file_col].apply(lambda x: dt.datetime.strptime(zarr_record_name(x).split('-',  maxsplit=1)[1], '%Y-%m-%d-%H-%M'))
+        self.sample_df['subject_id'] = self.sample_df[self.file_col].apply(lambda x: zarr_record_name(x).split('-',  maxsplit=1)[0])
         self.sample_df['unique_identifier'] = self.sample_df['subject_id'].astype(str) + '-' + self.sample_df[self.y_date_column].astype(str)
 
         self.sample_df.sort_values(by = ['unique_identifier'], ascending=True, inplace=True)
@@ -103,7 +104,7 @@ class ForecastingDataset(Dataset):
     def __getitem__(self, idx):
         # get full length x, idx can be a slice
         sample = self.sample_df.iloc[idx]
-        root_grp = zarr.open(sample[self.file_col], mode='r')
+        root_grp = open_zarr_group(sample[self.file_col], mode='r')
         # forecast_max = sample['end_idx'] + self.forecast_window # indice of max window for forecast
         # forecast_max_seconds = forecast_max / self.frequency # number seconds since beginning of waveform
         
@@ -134,7 +135,7 @@ class ForecastingDataset(Dataset):
         #sequence_padding_mask = torch.zeros([1, X.shape[-1]]) # channels are all the same length
         if torch.isnan(X).any():
             warnings.warn(f"X has nan values, sample_idx: {idx}")
-        del root_grp
+        close_zarr_group(root_grp)
         return X,Y
 
 # %% ../nbs/00_bedside.ipynb #c9b5b7b6
@@ -188,7 +189,7 @@ class SelfSupervisedDataset(Dataset):
     def __getitem__(self, idx):
         # get full length x, idx can be a slice
         sample = self.sample_df.iloc[idx]
-        root_grp = zarr.open(sample['file'], mode='r')
+        root_grp = open_zarr_group(sample['file'], mode='r')
         
         signals = []
         for channel in self.channels:
@@ -206,6 +207,7 @@ class SelfSupervisedDataset(Dataset):
                 temp = iqr_normalization(temp, is_spo2=False)
             signals.append(temp)
         
+        close_zarr_group(root_grp)
         X = Y = torch.from_numpy(np.array(signals, dtype=np.float32))
         if torch.isnan(X).any():
             warnings.warn(f"X has nan values, sample_idx: {idx}")

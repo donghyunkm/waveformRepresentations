@@ -1,0 +1,79 @@
+# PhysioJEPA model test metrics
+
+This is the central comparison of model test results for the hypotension
+forecast task. Unless noted otherwise, the comparable test set is the fixed
+subject split with 127,811 windows (5,494 positive and 122,317 negative), and
+the classification threshold is a 0.5 predicted probability.
+
+## Completed full-run results
+
+| Model | Training / evaluation regime | AUROC | Average precision | Accuracy | F1 | Recall / sensitivity | Specificity |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Supervised PatchTST | Full supervised, 512-dimensional encoder | 0.8688 | 0.2766 | 0.6702 | 0.1851 | 0.8713 | 0.6611 |
+| FCN | Full supervised paper-replication run | 0.7903 | 0.1911 | 0.4523 | 0.1242 | 0.9037 | 0.4320 |
+
+The supervised PatchTST confusion matrix is TN=80,866, FP=41,451, FN=707,
+TP=4,787. The FCN confusion matrix is TN=52,838, FP=69,479, FN=529,
+TP=4,965. The FCN paper-style evaluation additionally reports event-bootstrap
+95% confidence intervals: AUROC 0.7903 (0.7844–0.7961), average precision
+0.1911 (0.1819–0.2005), F1 0.1242 (0.1213–0.1271), recall 0.9037
+(0.8961–0.9112), and specificity 0.4320 (0.4291–0.4347), using 1,000
+event-level resamples with seed 16.
+
+## Best validation metrics
+
+AUROC and average precision are maximized independently. Thus, the two values
+in a row do not necessarily come from the same epoch or checkpoint. Completed
+available training logs report these values to three decimal places.
+
+| Model | Best validation AUROC | Best validation average precision | Status |
+| --- | ---: | ---: | --- |
+| Supervised PatchTST | 0.881 | 0.285 | Complete |
+| FCN | 0.869 | 0.345 | Complete |
+| Native PhysioJEPA downstream probe | — | — | No completed downstream validation |
+| ECG-JEPA downstream probe | — | — | No completed downstream validation |
+| Self-supervised PatchTST | — | — | Reconstruction, not classification |
+| Supervised PatchTST, cross-channel | 0.837* | 0.188* | Best observed through epoch 3; incomplete |
+| Supervised PatchTST, compact260K | 0.864* | 0.266* | Best observed through epoch 13; incomplete |
+| InceptionTime | — | — | No paired validation metrics available |
+| InceptionTime, compact265K | 0.837* | 0.245* | Best observed through epoch 4; incomplete |
+
+*Asterisks denote best observed values from incomplete training histories, not
+final model-selection results.* The FCN saved prediction artifact is from its
+AP-selected checkpoint and gives
+validation AUROC 0.8651 and average precision 0.3454; the 0.869 AUROC above is
+the independently best value in the training history. The full supervised
+PatchTST history likewise reached its independent maxima near epoch 16.
+
+## Model families awaiting comparable test results
+
+The following configurations are represented in the repository, but no
+completed prediction-and-metric artifact was available for the same fixed test
+split when this table was recorded. A smoke test, subset run, checkpoint, or
+self-supervised reconstruction result is not substituted for a held-out
+hypotension classification result.
+
+| Model | Configuration tracked | Status |
+| --- | --- | --- |
+| Native PhysioJEPA | Self-supervised pretraining plus frozen downstream hypotension probe | Test metrics pending; the one-GPU pretraining run is incomplete |
+| ECG-JEPA | ECG-JEPA pretraining plus downstream hypotension probe | No comparable completed test artifact |
+| Self-supervised PatchTST | Masked waveform reconstruction pretraining | Pretraining is not a hypotension classification test |
+| Supervised PatchTST, cross-channel | Full supervised model with cross-channel attention | Full run has checkpoints but no completed test metrics |
+| Supervised PatchTST, compact260K | Parameter-matched supervised PatchTST comparison | Full run has checkpoints but no completed test metrics |
+| InceptionTime | Canonical full supervised baseline | Full run has not produced a completed test metric artifact |
+| InceptionTime, compact265K | FCN-parameter-matched supervised baseline | Full run has not produced a completed test metric artifact |
+
+Smoke and 10% subject-subset results are intentionally excluded from the main
+comparison because they do not use the complete fixed test cohort. Add a row
+to the completed-results table only after saving predictions and evaluating the
+same metrics on the full test split.
+
+## Source reports and artifacts
+
+- [FCN replication report](jobs/baselines/FCN_PAPER_REPLICATION.md) contains
+  the full FCN metrics, bootstrap intervals, published comparison, and metrics
+  artifact path.
+- [Supervised PatchTST report](jobs/baselines/SUPERVISED_PATCHTST.md) contains
+  the completed PatchTST test metrics and prediction artifact location.
+- [PatchTST versus FCN comparison](jobs/baselines/SUPERVISED_PATCHTST_VS_FCN.md)
+  summarizes the two completed supervised baselines.

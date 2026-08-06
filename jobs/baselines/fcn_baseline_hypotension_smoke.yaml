@@ -1,0 +1,84 @@
+# Cluster smoke test for the released minute-level hypotension baseline.
+# This intentionally limits batches and is not a scientific training run.
+
+run_config:
+  model_type: "fcn"
+  wandb_project: "Hypotension Supervised Baselines"
+  model_run: "zipstore-smoke-v1"
+  name: "fcn_baseline_hypotension_zipstore_smoke"
+  random_state: 16
+  precision: "32-true"
+  wandb_offline: true
+
+paths:
+  data_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/containers"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_smoke"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_paper_minutes_smoke_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  win_length: 125
+  overlap: 0.0
+  constant_nan_tolerance: 0.2
+  y_padding_mask: -100
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: false
+  infer_forecast_windows: false
+
+smoke_test:
+  enabled: true
+  subjects_per_class: 60
+  rows_per_subject: 30
+  minimum_anchor_seconds: 2100
+
+arch:
+  c_in: 3
+  layers: [128, 256, 128]
+  kernel_sizes: [7, 5, 3]
+  n_classes: 1
+
+training:
+  batch_size: 2
+  epochs: 1
+  n_gpus: 1
+  num_workers: 4
+  sample_generation_workers: 8
+  limit_train_batches: 5
+  limit_val_batches: 2
+  limit_predict_batches: 2
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  loss_fxn: "CrossEntropy"
+  fine_tune: false
+  label_smoothing: 0.0
+  gamma: 2.0
+  perform_cv: false
+  mixup: false
+  mixup_alpha: 0.2
+  use_class_weights: false
+
+optimizer:
+  learning_rate: 0.00001
+  weight_decay: 0.001
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.4
+  optimizer_type: "adamw"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.00001
+  div_factor: 25
+  final_div_factor: 10000
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+evaluation:
+  paper_metrics: false

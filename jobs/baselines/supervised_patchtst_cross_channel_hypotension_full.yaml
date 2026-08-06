@@ -1,0 +1,153 @@
+# Supervised PatchTST with cross-channel attention on the full fixed cohort.
+
+run_config:
+  model_type: "supervised_patchtst_cross_channel"
+  wandb_project: "Hypotension Supervised Baselines"
+  model_run: "cross-channel-full-fixed-v1"
+  name: "supervised_patchtst_cross_channel_hypotension_full"
+  random_state: 16
+  precision: "bf16-mixed"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-08-01-supervised_patchtst_cross_channel-cross-channel-full-fixed-v1"
+  checkpoint_interval_minutes: 30
+
+paths:
+  data_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/containers"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/supervised_patchtst_cross_channel_hypotension_full"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  win_length: 125
+  overlap: 0.0
+  constant_nan_tolerance: 0.2
+  y_padding_mask: -100
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: true
+  infer_forecast_windows: false
+
+# Identical to the supervised standalone PatchTST configuration. The encoder
+# adds only one residual cross-channel attention layer after each temporal layer.
+arch:
+  c_in: 3
+  patch_size: 125
+  patch_stride: 125
+  num_patches: 1800
+  d_model: 512
+  n_heads: 8
+  d_ff: 2048
+  num_layers: 3
+  augmentations: ["patch_mask"]
+  mask_ratio: [0.1, 0.4]
+  shared_embedding: false
+  dropout: 0.1
+  attn_dropout: 0.0
+  act: "gelu"
+  pre_norm: false
+  pe_type: "rotary"
+  qkv_bias: true
+  init_std: 0.02
+  tokenizer_type: "simple"
+  tokenizer_kwargs:
+    depth: 1
+    bottleneck_channels: 112
+    residual: true
+    kernel_size: 40
+    bottleneck: true
+  classifier_mlp_ratio: 4.0
+  classifier_depth: 1
+  classifier_init_std: 0.02
+  classifier_qkv_bias: true
+  classifier_complete_block: true
+  classifier_affine: false
+  num_classes: 1
+
+training:
+  batch_size: 8
+  epochs: 20
+  n_gpus: 1
+  num_workers: 16
+  sample_generation_workers: 16
+  require_precomputed_samples: true
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  loss_fxn: "CrossEntropy"
+  fine_tune: true
+  label_smoothing: 0.0
+  gamma: 2.0
+  perform_cv: false
+  mixup: true
+  mixup_alpha: 0.2
+  use_class_weights: true
+
+optimizer:
+  learning_rate: 0.00001
+  weight_decay: 0.04
+  use_weight_decay_scheduler: true
+  final_weight_decay: 0.4
+  optimizer_type: "adamw"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.0006
+  div_factor: 25
+  final_div_factor: 100
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+cohort_validation:
+  strict_cohort_match: true
+  expected_cohort:
+    train:
+      positive_events: 43950
+      negative_events: 978613
+      icu_stays: 3195
+      patients: 2013
+    val:
+      positive_events: 5493
+      negative_events: 122338
+      icu_stays: 399
+      patients: 255
+    test:
+      positive_events: 5494
+      negative_events: 122317
+      icu_stays: 407
+      patients: 256
+
+paper_replication:
+  strict_cohort_match: false
+  expected_cohort:
+    train:
+      positive_events: 44897
+      negative_events: 1015429
+      icu_stays: 3280
+      patients: 2060
+    val:
+      positive_events: 5601
+      negative_events: 116307
+      icu_stays: 381
+      patients: 237
+    test:
+      positive_events: 4435
+      negative_events: 106273
+      icu_stays: 341
+      patients: 229
+
+evaluation:
+  paper_metrics: true
+  bootstrap_resamples: 1000
+  bootstrap_seed: 16

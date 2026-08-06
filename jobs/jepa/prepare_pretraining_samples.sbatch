@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH --job-name=physiojepa-jepa-index
+#SBATCH --partition=cpu_short
+#SBATCH --time=04:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --output=/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/%x-%j.out
+#SBATCH --error=/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/%x-%j.err
+
+set -euo pipefail
+
+source /gpfs/share/apps/anaconda3/gpu/2025.06/etc/profile.d/conda.sh
+conda activate physiojepa
+
+export PHYSIOJEPA_CONFIG=/gpfs/home/dk5565/PhysioJEPA/jobs/jepa/train_patch_jepa.yaml
+export MPLCONFIGDIR="/tmp/physiojepa-mpl-${SLURM_JOB_ID}"
+export TMPDIR="/tmp/physiojepa-${SLURM_JOB_ID}"
+
+mkdir -p "${MPLCONFIGDIR}" "${TMPDIR}"
+cd /gpfs/home/dk5565/PhysioJEPA/jobs/jepa
+
+python prepare_pretraining_samples.py
