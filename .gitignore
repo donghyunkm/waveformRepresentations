@@ -174,3 +174,7 @@ models*/
 jobs/**/*.txt
 jobs/**/*.db
 jobs/**/*.out
+
+# nbdev generated docs
+_docs/
+_proc/
