@@ -5,9 +5,9 @@
 # %% auto #0
 __all__ = ['PositionAwareMultiHeadAttention', 'PositionAwareTSTBlock', 'JEPABlock', 'apply_masks', 'apply_position_masks',
            'representation_channel_stats', 'create_masks', 'Encoder', 'Predictor', 'variance_loss', 'loss_pred',
-           'mse_variance_loss', 'JEPASimpleLightning', 'get_1d_sincos_pos_embed_from_grid',
-           'get_2d_sincos_pos_embed_from_grid', 'get_2d_sincos_pos_embed', 'Encoder_Block', 'Predictor_Block',
-           'MaskTransformer', 'MaskTransformerPredictor', 'ECGJEPALightning']
+           'mse_variance_loss', 'JEPASimpleLightning', 'physio_distance_contrastive', 'PhysioContrastiveJEPALightning',
+           'get_1d_sincos_pos_embed_from_grid', 'get_2d_sincos_pos_embed_from_grid', 'get_2d_sincos_pos_embed',
+           'Encoder_Block', 'Predictor_Block', 'MaskTransformer', 'MaskTransformerPredictor', 'ECGJEPALightning']
 
 # %% ../nbs/12_jepa.ipynb #7c26bf37
 import torch, math, torch.nn.functional as F, torch.nn as nn, copy, numpy as np, lightning.pytorch as pl, warnings
@@ -934,6 +934,570 @@ class JEPASimpleLightning(pl.LightningModule):
             return {'optimizer': self.optimizer, 'lr_scheduler': lr_scheduler}
         else:
             return self.optimizer
+
+# %% ../nbs/12_jepa.ipynb #contrastive_jepa_impl
+
+# =============================================================================
+# PHYSIOLOGICAL-DISTANCE CONTRASTIVE LOSS
+# =============================================================================
+# This is a modified InfoNCE loss where positive/negative pairs are defined by
+# physiological similarity (HR + MAP distance) rather than data augmentation.
+#
+# Key design choice: the denominator ONLY includes positives + negatives.
+# Same-patient pairs and "margin" pairs (epsilon <= d <= delta) are completely
+# excluded from both numerator AND denominator. This differs from standard
+# InfoNCE which normalizes over all negatives. The consequence is that the
+# loss is undefined (returns 0 with requires_grad) when a batch has no valid
+# positive pairs for any anchor — this happens when all physiologically-similar
+# windows in the batch come from the same patient.
+#
+# Gradient flow: this function receives L2-normalized projections and returns
+# a scalar loss. Gradients flow back through the projections into whatever
+# produced them (projection_head → mean-pool → online encoder).
+# =============================================================================
+
+def physio_distance_contrastive(projections, patient_ids, hr_values, map_values,
+                                sigma_hr=15.0, sigma_map=12.0,
+                                epsilon=0.5, delta=1.5, temperature=0.1):
+    """
+    Continuous physiological-distance contrastive loss.
+
+    For each anchor, positives are cross-patient windows within epsilon
+    physiological distance, negatives are cross-patient windows beyond delta.
+    Same-patient pairs and margin pairs (epsilon <= d <= delta) are excluded
+    from both numerator and denominator.
+
+    Args:
+        projections: L2-normalized embeddings [B, D]
+        patient_ids: integer patient IDs [B]
+        hr_values: continuous HR values (bpm) [B]
+        map_values: continuous MAP values (mmHg) [B]
+        sigma_hr: HR normalization scale (std-like)
+        sigma_map: MAP normalization scale (std-like)
+        epsilon: distance threshold for positives (d < epsilon)
+        delta: distance threshold for negatives (d > delta)
+        temperature: softmax temperature
+
+    Returns:
+        loss: scalar contrastive loss
+        metrics: dict with logging metrics
+    """
+    B = projections.shape[0]
+    device = projections.device
+
+    # -------------------------------------------------------------------------
+    # STEP 1: Compute pairwise physiological distance in normalized HR/MAP space.
+    # The distance is Euclidean in (HR/sigma_hr, MAP/sigma_map) space, so
+    # epsilon/delta thresholds are in units of "standard deviations" of
+    # physiological variation. This makes the thresholds interpretable:
+    # epsilon=0.5 means "within half a sigma in both HR and MAP".
+    # -------------------------------------------------------------------------
+    hr_norm = hr_values.float() / sigma_hr  # [B]
+    map_norm = map_values.float() / sigma_map  # [B]
+
+    hr_diff = hr_norm.unsqueeze(1) - hr_norm.unsqueeze(0)  # [B, B]
+    map_diff = map_norm.unsqueeze(1) - map_norm.unsqueeze(0)  # [B, B]
+    d_physio = torch.sqrt(hr_diff ** 2 + map_diff ** 2 + 1e-8)  # [B, B], +eps for grad stability
+
+    # -------------------------------------------------------------------------
+    # STEP 2: Build pair-type masks.
+    # Three-zone design:
+    #   - Positive zone:  d < epsilon AND different patient
+    #   - Margin zone:    epsilon <= d <= delta (excluded entirely — no gradient)
+    #   - Negative zone:  d > delta AND different patient
+    # Same-patient pairs are ALWAYS excluded regardless of distance, to prevent
+    # the model from learning trivial patient-identity shortcuts.
+    # -------------------------------------------------------------------------
+    pid = patient_ids.unsqueeze(1)
+    same_patient = (pid == pid.T)  # [B, B]
+    cross_patient = ~same_patient
+
+    self_mask = torch.eye(B, dtype=torch.bool, device=device)
+
+    # Valid pairs: cross-patient and not self (self is always excluded)
+    valid = cross_patient & ~self_mask  # [B, B]
+
+    positives = valid & (d_physio < epsilon)  # [B, B] — physiologically similar, different patient
+    negatives = valid & (d_physio > delta)  # [B, B] — physiologically distant, different patient
+    margin = valid & (d_physio >= epsilon) & (d_physio <= delta)  # [B, B] — ambiguous zone, ignored
+
+    # -------------------------------------------------------------------------
+    # STEP 3: Check viability. If no anchor has any positive pair, we cannot
+    # compute a meaningful loss. Return zero with requires_grad=True so the
+    # backward pass doesn't break. This is expected in low-diversity batches
+    # (e.g., many samples from the same patient, or very tight epsilon).
+    # -------------------------------------------------------------------------
+    has_positives = positives.any(dim=1)  # [B]
+    n_anchors_with_pos = has_positives.sum().item()
+
+    metrics = {
+        'mean_positives_per_anchor': positives[has_positives].float().sum(dim=1).mean().item() if n_anchors_with_pos > 0 else 0.0,
+        'frac_anchors_with_positive': n_anchors_with_pos / B,
+        'mean_negatives_per_anchor': negatives.float().sum(dim=1).mean().item(),
+        'frac_same_patient': same_patient.float().sum().item() / (B * B),
+        'frac_margin': margin.float().sum().item() / max(cross_patient.float().sum().item(), 1.0),
+    }
+
+    if n_anchors_with_pos == 0:
+        # No valid positive pairs in this batch — loss is undefined.
+        # Return a zero tensor that still participates in the graph.
+        return torch.tensor(0.0, device=device, requires_grad=True), metrics
+
+    # -------------------------------------------------------------------------
+    # STEP 4: Compute InfoNCE with restricted denominator.
+    # Standard InfoNCE: -log(exp(sim_pos/τ) / Σ_all_neg exp(sim_neg/τ))
+    # Our variant: denominator sums ONLY over (positives ∪ negatives) for each
+    # anchor. Margin pairs and same-patient pairs contribute zero to both
+    # numerator and denominator. This means each anchor's softmax distribution
+    # is only over the pairs we're confident about.
+    # -------------------------------------------------------------------------
+
+    # Cosine similarity (projections are already L2-normalized upstream)
+    sim_matrix = projections @ projections.T  # [B, B]
+    sim_matrix = sim_matrix / temperature
+
+    # Numerical stability: subtract max per row (standard log-sum-exp trick)
+    sim_max, _ = sim_matrix.max(dim=1, keepdim=True)
+    logits = sim_matrix - sim_max.detach()
+
+    # Denominator: ONLY positives + negatives participate.
+    # This is the key difference from standard InfoNCE — margin pairs and
+    # same-patient pairs are masked out, not just from the numerator.
+    denom_mask = positives | negatives  # [B, B]
+    exp_logits = torch.exp(logits) * denom_mask.float()
+    denominator = exp_logits.sum(dim=1, keepdim=True)  # [B, 1]
+
+    # Log probability: log(exp(logit_ij) / denom_i) = logit_ij - log(denom_i)
+    log_prob = logits - torch.log(denominator + 1e-8)  # [B, B]
+
+    # -------------------------------------------------------------------------
+    # STEP 5: Average log-prob over all positive pairs for each valid anchor,
+    # then average across anchors. Only anchors with at least one positive
+    # contribute to the final loss.
+    # -------------------------------------------------------------------------
+    num_pos = positives.float().sum(dim=1)  # [B]
+    valid_anchors = num_pos > 0
+    mean_log_prob_pos = (log_prob * positives.float()).sum(dim=1)  # [B]
+    mean_log_prob_pos = mean_log_prob_pos[valid_anchors] / num_pos[valid_anchors]
+
+    loss = -mean_log_prob_pos.mean()
+    return loss, metrics
+
+
+# %% ../nbs/12_jepa.ipynb #dd689fa8
+
+# =============================================================================
+# PhysioContrastiveJEPALightning
+# =============================================================================
+# This class combines two self-supervised objectives:
+#
+# 1. JEPA PREDICTION LOSS (L_JEPA):
+#    The online encoder sees only CONTEXT (visible) patches. The predictor
+#    tries to reconstruct the HIDDEN (target) patch representations in the
+#    latent space of the EMA target encoder. This is the standard JEPA objective.
+#
+# 2. PHYSIOLOGICAL-DISTANCE CONTRASTIVE LOSS (L_contrastive):
+#    The online encoder's output (context tokens only) is mean-pooled and
+#    projected to produce a normalized embedding. The contrastive loss pulls
+#    together embeddings from physiologically-similar windows (different patients)
+#    and pushes apart physiologically-distant ones.
+#
+# GRADIENT FLOW:
+#   L_JEPA       → predictor → online encoder (via context tokens fed to predictor)
+#   L_contrastive → projection_head → mean-pool → online encoder (via context tokens)
+#   EMA target encoder receives NO gradients — updated purely by exponential
+#   moving average of the online encoder parameters after each batch.
+#
+# MASKING NAMING CONVENTION (confusing but established):
+#   `non_masks` = indices of VISIBLE (context) patches — what the encoder sees
+#   `masks`     = indices of HIDDEN (target) patches — what the predictor predicts
+#   This is counterintuitive: "non_masks" means "not masked" (i.e., visible).
+#
+# The contrastive representation is built from context patches only (the random
+# subset visible to the encoder). This means the contrastive embedding varies
+# stochastically even for the same input window, providing implicit augmentation.
+# =============================================================================
+
+class PhysioContrastiveJEPALightning(pl.LightningModule):
+    """
+    JEPA with continuous physiological-distance contrastive loss.
+
+    Combines:
+    1. Standard JEPA prediction loss (MSE on masked target tokens)
+    2. Physiological-distance contrastive loss: pulls together windows from
+       different patients that are physiologically close (d < epsilon),
+       pushes apart windows that are physiologically distant (d > delta),
+       ignores same-patient pairs entirely.
+
+    The training_step expects batches of (X, patient_ids, hr_values, map_values).
+    """
+
+    def __init__(self,
+                 learning_rate,
+                 train_size,
+                 batch_size,
+                 n_gpus,
+                 patchtsjepa_encoder_kwargs,
+                 patchtsjepa_predictor_kwargs,
+                 weight_decay=0.04,
+                 use_weight_decay_scheduler=False,
+                 final_weight_decay=0.4,
+                 epochs=100,
+                 optimizer_type='adamw',
+                 scheduler_type='OneCycle',
+                 target_mask_range=(0.05, 0.3),
+                 context_mask_range=(0.5, 1.),
+                 mask_block_range=(1, 30),
+                 ema_decay=0.996,
+                 scheduler_kwargs={},
+                 transforms=None,
+                 loss_fn=loss_pred,
+                 # Contrastive-specific parameters
+                 contrastive_weight=0.1,
+                 contrastive_temperature=0.1,
+                 contrastive_epsilon=0.5,
+                 contrastive_delta=1.5,
+                 sigma_hr=15.0,
+                 sigma_map=12.0,
+                 projection_dim=128,
+                 projection_hidden_dim=None,
+                 ):
+        super().__init__()
+        self.scheduler_type = scheduler_type.lower() if scheduler_type else None
+        self.scheduler_kwargs = scheduler_kwargs
+        if self.scheduler_type is not None:
+            assert self.scheduler_type in ['onecycle', 'cosineannealingwarmrestarts'], \
+                "scheduler must be either OneCycle, CosineAnnealingWarmRestarts, or None"
+        self.save_hyperparameters()
+        self.learning_rate = learning_rate
+        self.train_size = train_size
+        self.batch_size = batch_size * n_gpus
+        self.epochs = epochs
+        self.optimizer_type = optimizer_type.lower()
+        self.weight_decay = weight_decay
+        self.use_weight_decay_scheduler = use_weight_decay_scheduler
+        self.final_weight_decay = final_weight_decay
+        self.loss_fn = loss_fn
+        self.target_mask_range = target_mask_range
+        self.context_mask_range = context_mask_range
+        self.ema_decay = ema_decay
+        self.ipe = self.train_size // self.batch_size
+        self.total_steps = int(self.ipe * self.epochs)
+
+        # Contrastive parameters
+        self.contrastive_weight = contrastive_weight
+        self.contrastive_temperature = contrastive_temperature
+        self.contrastive_epsilon = contrastive_epsilon
+        self.contrastive_delta = contrastive_delta
+        self.sigma_hr = sigma_hr
+        self.sigma_map = sigma_map
+
+        # Build encoder
+        self.encoder = Encoder(**patchtsjepa_encoder_kwargs)
+        self.num_patch = self.encoder.num_patches
+        self.patch_size = self.encoder.patch_size
+        self.patch_stride = self.encoder.patch_stride
+        self.mask_block_range = mask_block_range
+        self.c_in = self.encoder.c_in
+        self.d_model = self.encoder.d_model
+
+        # Build predictor
+        patchtsjepa_predictor_kwargs['num_patches'] = self.num_patch
+        self.predictor = Predictor(**patchtsjepa_predictor_kwargs)
+
+        # EMA target encoder — a frozen copy of the online encoder, updated only
+        # via exponential moving average (no gradients ever). Produces the latent
+        # targets that the predictor tries to match for the JEPA loss.
+        self.target_encoder = copy.deepcopy(self.encoder).requires_grad_(False).eval()
+
+        # Projection head for contrastive loss — maps from d_model to a lower-dim
+        # normalized space for InfoNCE. This head receives gradients from L_contrastive
+        # only (not from L_JEPA). Using BN + ReLU follows SimCLR-style projection.
+        proj_hidden = projection_hidden_dim or self.d_model
+        self.projection_head = nn.Sequential(
+            nn.Linear(self.d_model, proj_hidden),
+            nn.BatchNorm1d(proj_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(proj_hidden, projection_dim),
+        )
+
+        self.transforms = transforms
+        self.tokenizer_type = patchtsjepa_encoder_kwargs.get('tokenizer_type')
+        self.melt_channels_to_batch = (
+            not patchtsjepa_encoder_kwargs.get('shared_embedding')
+            and self.tokenizer_type in ['inception', 'simple', 'simple_conv']
+        ) or (self.tokenizer_type == 'linear')
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.target_encoder.eval()
+        return self
+
+    def get_momentum_value(self):
+        current_step = self.global_step
+        progress = min(current_step / max(self.total_steps, 1), 1.0)
+        return self.ema_decay + progress * (1.0 - self.ema_decay)
+
+    def ema_update(self, context_encoder, target_encoder):
+        """Update target encoder via exponential moving average.
+        target_k = m * target_k + (1-m) * online_k
+        No gradients flow through this operation — requires_grad_(False) is
+        explicitly enforced on every parameter update."""
+        with torch.no_grad():
+            m = self.get_momentum_value()
+            for param_q, param_k in zip(context_encoder.parameters(),
+                                        target_encoder.parameters()):
+                param_k.data.mul_(m).add_((1. - m) * param_q.detach().data)
+                param_k.requires_grad_(False)
+        return target_encoder
+
+    def forward(self, x, channel_mask=None):
+        """Inference: encode without masking. Returns [bs x nvars x d_model x num_patch]."""
+        x = self.encoder(x)
+        if self.melt_channels_to_batch:
+            bs = x.size(0) // self.c_in
+            x = x.reshape(bs, self.c_in, -1, self.d_model)
+        else:
+            x = x.unsqueeze(1)
+        x = x.permute(0, 1, 3, 2)
+        return x
+
+    def _compute_contrastive_loss(self, encoder_tokens, patient_ids, hr_values, map_values):
+        """
+        Compute physiological-distance contrastive loss from encoder tokens.
+
+        IMPORTANT: encoder_tokens are the output of the ONLINE encoder processing
+        only the CONTEXT (visible) patches. These are NOT full-sequence representations —
+        they represent a random subset of patches (determined by non_masks).
+
+        Data flow:
+          encoder_tokens [B*c_in, n_context_patches, d_model]  (if channels melted)
+            → mean over patches → [B*c_in, d_model]
+            → reshape to [B, c_in, d_model] → mean over channels → [B, d_model]
+            → projection_head → [B, projection_dim]
+            → L2 normalize → physio_distance_contrastive()
+
+        The mean-pooling over context patches (not all patches) means this
+        representation is inherently stochastic — different masks give different
+        embeddings for the same window. This acts as implicit augmentation.
+        """
+        # ---- Mean pool over the patch (sequence) dimension ----
+        # encoder_tokens shape: [B*c_in, n_context_patches, d_model] (melted) or [B, n_ctx, d_model]
+        # After mean: [B*c_in, d_model] or [B, d_model]
+        pooled = encoder_tokens.mean(dim=1)
+
+        # ---- If channels are melted to batch, reconstitute and average over channels ----
+        # When melt_channels_to_batch=True, the encoder processes each channel independently
+        # as if it were a separate sample (batch dim = B * n_channels). We need to
+        # re-group by sample and average across channels to get one vector per window.
+        if self.melt_channels_to_batch:
+            bs = pooled.size(0) // self.c_in
+            pooled = pooled.reshape(bs, self.c_in, self.d_model)  # [B, c_in, d_model]
+            pooled = pooled.mean(dim=1)  # [B, d_model] — single vector per sample
+
+        # ---- Project to contrastive space and L2-normalize ----
+        # The projection head is a learned MLP that maps from the encoder's d_model
+        # space to a lower-dimensional space (default 128) suited for cosine similarity.
+        # L2 normalization ensures the loss operates on the unit hypersphere.
+        projected = self.projection_head(pooled)  # [B, projection_dim]
+        projected = F.normalize(projected, dim=1)  # unit-norm for cosine similarity
+
+        # ---- Compute InfoNCE with physiological distance ----
+        return physio_distance_contrastive(
+            projected, patient_ids, hr_values, map_values,
+            sigma_hr=self.sigma_hr, sigma_map=self.sigma_map,
+            epsilon=self.contrastive_epsilon, delta=self.contrastive_delta,
+            temperature=self.contrastive_temperature,
+        )
+
+    def training_step(self, batch, batch_idx):
+        if self.transforms is not None:
+            batch = self.transforms(batch)
+
+        # Unpack: (X, patient_ids, hr_values, map_values)
+        x, patient_ids, hr_values, map_values = batch
+
+        # =====================================================================
+        # MASKING: Create random patch masks for this batch.
+        # NAMING CONVENTION (confusing but established in codebase):
+        #   `non_masks` = indices of VISIBLE (context) patches — fed to encoder
+        #   `masks`     = indices of HIDDEN (target) patches — what predictor predicts
+        # The names mean "non-masked" and "masked" respectively.
+        # =====================================================================
+        masks, non_masks = create_masks(
+            x, patch_size=self.patch_size, patch_stride=self.patch_stride,
+            context_mask_range=self.context_mask_range,
+            target_mask_range=self.target_mask_range,
+            melt_channels_to_batch=self.melt_channels_to_batch
+        )
+        masks = masks.to(x.device)
+        non_masks = non_masks.to(x.device)
+
+        # =====================================================================
+        # EMA TARGET ENCODER: Produces latent targets for the JEPA prediction loss.
+        # This encoder receives NO gradients — it's a frozen EMA copy of the online
+        # encoder, updated in on_train_batch_end. We extract representations at the
+        # HIDDEN (target) patch positions only, since those are what the predictor
+        # must reconstruct.
+        # =====================================================================
+        with torch.no_grad():
+            target_ema = self.target_encoder(x)  # full sequence, no masking
+            target_ema = F.layer_norm(target_ema, (target_ema.size(-1),))
+            target_ema = apply_masks(target_ema, masks)  # extract HIDDEN patch representations
+
+        # =====================================================================
+        # ONLINE ENCODER: Processes only the CONTEXT (visible) patches.
+        # mask=non_masks means "only encode these patch indices" — the encoder
+        # never sees the hidden patches. This is the core JEPA asymmetry:
+        # the online encoder sees a subset, the target encoder sees everything.
+        #
+        # The output `tokens` has shape [B*c_in, n_context_patches, d_model]
+        # (if melt_channels_to_batch) or [B, n_context_patches, d_model].
+        # These tokens are used for BOTH the JEPA loss and the contrastive loss.
+        # =====================================================================
+        tokens = self.encoder(x, mask=non_masks)  # context patches only
+
+        # =====================================================================
+        # JEPA PREDICTION LOSS (L_JEPA):
+        # The predictor takes the context tokens and predicts representations at
+        # the hidden patch positions. Loss = MSE between predicted and EMA-target
+        # representations at hidden positions.
+        # Gradients: predictor → online encoder (through tokens)
+        # =====================================================================
+        pred = self.predictor(tokens, mask=masks, non_masks=non_masks)
+        jepa_loss = self.loss_fn(pred, target_ema, representations=tokens, alpha=0.2)
+
+        # =====================================================================
+        # CONTRASTIVE LOSS (L_contrastive):
+        # Operates on the ONLINE encoder output (NOT the EMA target encoder).
+        # Uses the same `tokens` from above — these are context patches only,
+        # meaning the contrastive representation is built from a random subset
+        # of patches that varies per sample per step (implicit augmentation).
+        # Gradients: projection_head → mean-pool → online encoder (through tokens)
+        # =====================================================================
+        contrastive_loss, metrics = self._compute_contrastive_loss(
+            tokens, patient_ids, hr_values, map_values
+        )
+
+        # =====================================================================
+        # COMBINED LOSS: weighted sum. Both losses share the online encoder,
+        # so the encoder receives gradients from both objectives simultaneously.
+        # The EMA target encoder is gradient-free — updated in on_train_batch_end.
+        # =====================================================================
+        total_loss = jepa_loss + self.contrastive_weight * contrastive_loss
+
+        if not torch.isfinite(total_loss):
+            raise FloatingPointError(
+                f"PhysioContrastive JEPA loss not finite at batch {batch_idx}: "
+                f"jepa={jepa_loss.item():.4f}, contrastive={contrastive_loss.item():.4f}"
+            )
+
+        # Logging
+        self.log('train_loss', total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_jepa_loss', jepa_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_contrastive_loss', contrastive_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_mean_pos_per_anchor', metrics['mean_positives_per_anchor'], on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_frac_anchors_with_pos', metrics['frac_anchors_with_positive'], on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_mean_neg_per_anchor', metrics['mean_negatives_per_anchor'], on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_frac_same_patient', metrics['frac_same_patient'], on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_frac_margin', metrics['frac_margin'], on_step=True, on_epoch=True, sync_dist=True)
+
+        if batch_idx % 50 == 0:
+            with torch.no_grad():
+                self.log('batch_unique_patients', float(patient_ids.unique().numel()))
+                self.log('ema_momentum', self.get_momentum_value())
+
+        return total_loss
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        # EMA UPDATE: The target encoder is updated AFTER each training step.
+        # It never receives gradients — its parameters are a smoothed trailing
+        # average of the online encoder. Momentum increases from ema_decay toward
+        # 1.0 over training (slower updates as training progresses).
+        self.target_encoder = self.ema_update(self.encoder, self.target_encoder)
+
+    def on_train_batch_start(self, batch, batch_idx):
+        if self.use_weight_decay_scheduler:
+            step = self.global_step
+            T_max = int(self.ipe * self.epochs)
+            progress = step / T_max
+            new_wd = (self.final_weight_decay
+                      + (self.weight_decay - self.final_weight_decay)
+                      * 0.5 * (1. + math.cos(math.pi * progress)))
+            if self.final_weight_decay <= self.weight_decay:
+                new_wd = max(self.final_weight_decay, new_wd)
+            else:
+                new_wd = min(self.final_weight_decay, new_wd)
+            for group in self.optimizer.param_groups:
+                if ('WD_exclude' not in group) or not group['WD_exclude']:
+                    group['weight_decay'] = new_wd
+
+    def validation_step(self, batch, batch_idx):
+        x, patient_ids, hr_values, map_values = batch
+
+        masks, non_masks = create_masks(
+            x, patch_size=self.patch_size, patch_stride=self.patch_stride,
+            context_mask_range=self.context_mask_range,
+            target_mask_range=self.target_mask_range,
+            melt_channels_to_batch=self.melt_channels_to_batch
+        )
+        masks = masks.to(x.device)
+        non_masks = non_masks.to(x.device)
+
+        with torch.no_grad():
+            target_ema = self.target_encoder(x)
+            target_ema = F.layer_norm(target_ema, (target_ema.size(-1),))
+            target_ema = apply_masks(target_ema, masks)
+
+        tokens = self.encoder(x, mask=non_masks)
+        pred = self.predictor(tokens, mask=masks, non_masks=non_masks)
+
+        jepa_loss = self.loss_fn(pred, target_ema, representations=tokens, alpha=0.2)
+        contrastive_loss, metrics = self._compute_contrastive_loss(
+            tokens, patient_ids, hr_values, map_values
+        )
+        total_loss = jepa_loss + self.contrastive_weight * contrastive_loss
+
+        self.log('val_loss', total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('val_jepa_loss', jepa_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('val_contrastive_loss', contrastive_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('val_frac_anchors_with_pos', metrics['frac_anchors_with_positive'], on_step=False, on_epoch=True, sync_dist=True)
+
+    def configure_optimizers(self):
+        param_groups = [
+            {'params': (p for n, p in self.encoder.named_parameters()
+                        if ('bias' not in n) and (len(p.shape) != 1))},
+            {'params': (p for n, p in self.predictor.named_parameters()
+                        if ('bias' not in n) and (len(p.shape) != 1))},
+            {'params': (p for n, p in self.projection_head.named_parameters()
+                        if ('bias' not in n) and (len(p.shape) != 1))},
+            {'params': (p for n, p in self.encoder.named_parameters()
+                        if ('bias' in n) or (len(p.shape) == 1)),
+             'WD_exclude': True, 'weight_decay': 0},
+            {'params': (p for n, p in self.predictor.named_parameters()
+                        if ('bias' in n) or (len(p.shape) == 1)),
+             'WD_exclude': True, 'weight_decay': 0},
+            {'params': (p for n, p in self.projection_head.named_parameters()
+                        if ('bias' in n) or (len(p.shape) == 1)),
+             'WD_exclude': True, 'weight_decay': 0},
+        ]
+        wd = self.weight_decay if not self.use_weight_decay_scheduler else 0.0
+        if self.optimizer_type == 'adamw':
+            self.optimizer = torch.optim.AdamW(param_groups, lr=self.learning_rate, weight_decay=wd, fused=False)
+        else:
+            self.optimizer = torch.optim.Adam(param_groups, lr=self.learning_rate, weight_decay=wd, fused=False)
+
+        if self.scheduler_type == 'onecycle':
+            scheduler = OneCycleLR(self.optimizer, epochs=self.epochs, steps_per_epoch=self.ipe, **self.scheduler_kwargs)
+            lr_scheduler = {'scheduler': scheduler, 'interval': 'step'}
+            return {'optimizer': self.optimizer, 'lr_scheduler': lr_scheduler}
+        elif self.scheduler_type == 'cosineannealingwarmrestarts':
+            scheduler = CosineAnnealingWarmRestarts(self.optimizer, **self.scheduler_kwargs)
+            lr_scheduler = {'scheduler': scheduler, 'interval': 'epoch'}
+            return {'optimizer': self.optimizer, 'lr_scheduler': lr_scheduler}
+        else:
+            return self.optimizer
+
 
 # %% ../nbs/12_jepa.ipynb #dd689fa8
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):

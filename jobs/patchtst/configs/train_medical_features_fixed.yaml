@@ -1,0 +1,82 @@
+# Frozen-encoder medical feature regression probe for the pretrained PatchTST checkpoint.
+# Predicts 15 physiological features from the full token sequence.
+
+run_config:
+  model_type: "patchtst_medical_feature_probe"
+  wandb_project: "Medical Features PatchTST Regression"
+  model_run: "medical-features-fixed-v1"
+  name: "patchtst_medical_feature_attentive_probe_v1"
+  random_state: 16
+  precision: "bf16-mixed"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-08-12-patchtst-medical-feature-probe-v1"
+  checkpoint_interval_minutes: 30
+
+paths:
+  pretrained_encoder_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/patchtst_self_supervised_paper/2026-08-05-patchtst-paper-1gpu-v1/best-val-epoch=03-loss=0.00329.ckpt"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/patchtst_medical_feature_probe"
+  predictions_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/predictions/patchtst_medical_feature_probe"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_v1"
+  icu_output_dir: "/gpfs/home/dk5565/icuDataExtraction/output_v2"
+  feature_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/probing/medical_features/split_caches"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  constant_nan_tolerance: 0.2
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  use_transforms: true
+  infer_forecast_windows: false
+
+lp_head:
+  num_heads: 4
+  mlp_ratio: 4.0
+  depth: 1
+  init_std: 0.02
+  qkv_bias: true
+  complete_block: true
+  affine: false
+
+training:
+  batch_size: 8
+  epochs: 20
+  n_gpus: 1
+  num_workers: 8
+  accumulate_grad_batches: 16
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  fine_tune: false
+  mixup: false
+  use_class_weights: false
+  log_every_n_steps: 50
+  num_sanity_val_steps: 2
+
+optimizer:
+  learning_rate: 0.000001
+  weight_decay: 0.0001
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.4
+  optimizer_type: "AdamW"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.005
+  div_factor: 25
+  final_div_factor: 10000
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+evaluation:
+  run_predictions: true

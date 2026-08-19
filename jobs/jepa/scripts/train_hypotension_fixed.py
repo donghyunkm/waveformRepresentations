@@ -73,6 +73,13 @@ def _load_split_inputs(config: dict, split: str) -> tuple[pd.DataFrame, pd.DataF
     if unexpected:
         raise ValueError(f"{split} cache contains subjects outside the fixed split")
 
+    # Remap container paths to local override directory if set
+    containers_override = os.environ.get("PHYSIOJEPA_CONTAINERS_OVERRIDE")
+    if containers_override:
+        samples["file_path"] = samples["file_path"].map(
+            lambda p: os.path.join(containers_override, os.path.basename(p))
+        )
+
     maximum = config["training"].get(f"max_{split}_samples")
     if maximum is not None:
         samples = samples.sample(

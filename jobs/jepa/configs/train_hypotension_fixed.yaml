@@ -16,7 +16,7 @@ resume:
   checkpoint_interval_minutes: 30
 
 paths:
-  pretrained_encoder_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_paper/2026-08-03-native-jepa-paper-full-fixed-v1/last.ckpt"
+  pretrained_encoder_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_paper/2026-08-04-native-jepa-paper-1gpu-debug-v1/best-val-epoch=13-loss=0.21508.ckpt"
   models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_hypotension_probe"
   predictions_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/predictions/jepa_native_hypotension_probe"
   outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"

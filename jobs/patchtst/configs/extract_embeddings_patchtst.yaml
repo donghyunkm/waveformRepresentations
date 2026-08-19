@@ -1,0 +1,30 @@
+# Extract frozen PatchTST encoder embeddings for downstream classifier training.
+
+run_config:
+  model_type: "patchtst"
+  random_state: 16
+  precision: "bf16-mixed"
+
+paths:
+  pretrained_encoder_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/patchtst_self_supervised_paper/2026-08-05-patchtst-paper-1gpu-v1/best-val-epoch=03-loss=0.00329.ckpt"
+  embeddings_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/embeddings/patchtst_hypotension"
+  outcome_df_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/labels/hypotension_labels_mimic_all_events_rolling5min.csv.gz"
+  subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/fcn_hypotension_paper"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_hypotension_fixed_subject_split_v1"
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  forecast_window_sec: [300]
+  sample_seq_len_seconds: 1800
+  constant_nan_tolerance: 0.2
+  y_outcome: "hypotension_label"
+  require_all_channels: true
+  normalize_signals: true
+  infer_forecast_windows: false
+
+extraction:
+  batch_size: 128
+  num_workers: 16
+  splits: ["train", "val", "test"]

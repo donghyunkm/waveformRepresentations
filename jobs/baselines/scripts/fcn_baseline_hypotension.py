@@ -491,10 +491,17 @@ if __name__ == "__main__":
             if observed_subjects != split_subjects[split]:
                 missing = sorted(split_subjects[split] - observed_subjects)
                 unexpected = sorted(observed_subjects - split_subjects[split])
-                raise RuntimeError(
-                    f"{split} cache does not match fixed subject manifest: "
-                    f"{len(missing)} missing, {len(unexpected)} unexpected"
-                )
+                if unexpected:
+                    raise RuntimeError(
+                        f"{split} cache has unexpected subjects not in manifest: "
+                        f"{len(unexpected)} unexpected: {unexpected}"
+                    )
+                if missing:
+                    import warnings
+                    warnings.warn(
+                        f"{split}: {len(missing)} manifest subject(s) have no valid samples "
+                        f"and will be excluded: {missing}"
+                    )
     cohort_summary = summarize_cohort(datasets)
     cohort_summary_path = Path(models_dir) / f'{dataset_filename}-cohort_summary.json'
     save_metrics_json(cohort_summary, cohort_summary_path)

@@ -1,21 +1,48 @@
 # AGENTS.md
 
-## Scope
+## Scope and core safety
 
 These instructions apply to the entire PhysioJEPA repository.
 
 This checkout is for local experimentation only. Do not commit, push, open pull
 requests, or modify remotes unless the user explicitly asks.
 
+## Session workflow
+
+At the beginning of every session:
+
+1. Read `PROGRESS.md` to understand current priorities, active jobs, and
+   immediate next steps.
+2. Read relevant `docs/*.md` files for the workstream you will be working on.
+
+Sources of truth:
+
+```text
+PROGRESS.md = source of truth for current project state (priorities, jobs, progress)
+docs/*.md   = source of truth for detailed technical/project knowledge
+```
+
+## Before modifying code
+
+1. Read `PROGRESS.md`.
+2. Read the relevant `docs/*.md` workstream document.
+3. Check `git status --short`.
+4. Inspect the existing implementation before proposing a replacement.
+5. For library code, identify the source notebook under `nbs/`; do not treat
+   generated `physiojepa/*.py` files as the primary source.
+6. Make the smallest change that solves the requested problem.
+7. Run focused verification before broader tests.
+8. Update documentation if the work materially changes project state or knowledge.
+
 ## Local environment
 
-Use the existing Conda environment named `physiojepa`. It is located at:
+Use the existing Conda environment named `physiojepa`:
 
 ```text
 /gpfs/home/dk5565/.conda/envs/physiojepa
 ```
 
-Initialize Conda and activate the environment with:
+Initialize and activate with:
 
 ```bash
 source /gpfs/share/apps/anaconda3/gpu/2025.06/etc/profile.d/conda.sh
@@ -34,65 +61,70 @@ For non-interactive commands, either activate the environment first or invoke:
 /gpfs/home/dk5565/.conda/envs/physiojepa/bin/python
 ```
 
-The registered Jupyter kernel is named `physiojepa` and is displayed as
-`Python (PhysioJEPA)`.
-
-The committed notebooks currently record the generic `python3` kernelspec.
-When working interactively, select `Python (PhysioJEPA)` and avoid notebook
-metadata or output churn unrelated to the requested change.
+The registered Jupyter kernel is named `physiojepa` (displayed as
+`Python (PhysioJEPA)`). The committed notebooks record the generic `python3`
+kernelspec. When working interactively, select `Python (PhysioJEPA)` and avoid
+notebook metadata or output churn unrelated to the requested change.
 
 Do not create another virtual environment or reinstall the full dependency set
 unless the user explicitly requests it.
 
-## Repository model
+## Repository structure (nbdev)
 
 PhysioJEPA is an nbdev repository:
 
-- `nbs/` contains the source-of-truth notebooks.
-- `physiojepa/` contains Python modules generated from those notebooks.
-- `jobs/` contains data-processing and training entry points with YAML configs.
-- `_docs/` contains generated documentation.
-- `_proc/` contains intermediate documentation/notebook processing output.
-- `settings.ini` contains package metadata and dependency declarations.
+- `nbs/` — source-of-truth notebooks.
+- `physiojepa/` — Python modules generated from those notebooks.
+- `jobs/` — data-processing and training entry points with YAML configs.
+- `_docs/` — generated documentation.
+- `_proc/` — intermediate documentation/notebook processing output.
+- `settings.ini` — package metadata and dependency declarations.
 
 The notebook-to-module map is:
 
-- `00_bedside.ipynb` -> `bedside.py`: Zarr-backed forecasting and
-  self-supervised datasets.
-- `03_signal.ipynb` -> `signal.py`: filtering, resampling, normalization, ABP
-  beat detection, feature extraction, and signal-quality processing.
-- `05_utils.ipynb` -> `utils.py`: truncated-normal initialization.
-- `06_train.ipynb` -> `train.py`: downstream linear-probing/fine-tuning
-  Lightning wrapper.
-- `07_loss.ipynb` -> `loss.py`: reconstruction, variance, cross-entropy, and
-  focal losses.
-- `08_data_preprocessing.ipynb` -> `data_preprocessing.py`: sample indexing,
-  signal validity checks, interpolation, and multiprocessing helpers.
-- `09_augmentations.ipynb` -> `augmentations.py`: patch/value/channel
-  augmentations and training callbacks.
-- `10_layers.ipynb`, `11_heads.ipynb`, and `18_tokenizers.ipynb` -> reusable
-  transformer layers, attentive classifiers, and waveform tokenizers.
-- `12_jepa.ipynb` -> `jepa.py`: native PhysioJEPA and ECG-JEPA encoders,
-  predictors, masking, EMA target encoders, and Lightning modules.
-- `13_baselines.ipynb` -> `baselines.py`: FCN baseline and generic supervised
-  Lightning wrapper.
-- `17_patchtst.ipynb` -> `patchtst.py`: PatchTST-style masked reconstruction
-  encoder and Lightning module.
+| Notebook | Module | Purpose |
+|----------|--------|---------|
+| `00_bedside.ipynb` | `bedside.py` | Zarr-backed forecasting and SSL datasets |
+| `03_signal.ipynb` | `signal.py` | Filtering, resampling, normalization, ABP beat detection |
+| `05_utils.ipynb` | `utils.py` | Truncated-normal initialization |
+| `06_train.ipynb` | `train.py` | Downstream linear-probing/fine-tuning Lightning wrapper |
+| `07_loss.ipynb` | `loss.py` | Reconstruction, variance, CE, and focal losses |
+| `08_data_preprocessing.ipynb` | `data_preprocessing.py` | Sample indexing, validity checks, interpolation |
+| `09_augmentations.ipynb` | `augmentations.py` | Patch/value/channel augmentations and callbacks |
+| `10_layers.ipynb` | `layers.py` | Reusable transformer layers |
+| `11_heads.ipynb` | `heads.py` | Attentive classifiers |
+| `12_jepa.ipynb` | `jepa.py` | PhysioJEPA and ECG-JEPA encoders, predictors, masking, EMA |
+| `13_baselines.ipynb` | `baselines.py` | FCN baseline and supervised Lightning wrapper |
+| `17_patchtst.ipynb` | `patchtst.py` | PatchTST masked reconstruction encoder |
+| `18_tokenizers.ipynb` | `tokenizers.py` | Waveform tokenizers |
 
-When changing library behavior, make the primary change in the corresponding
-notebook under `nbs/`, then regenerate the package with:
+When changing library behavior, edit the corresponding notebook under `nbs/`,
+then regenerate the package:
 
 ```bash
 nbdev_prepare
 ```
 
-Avoid editing generated files in `physiojepa/` alone because a later nbdev
-export can overwrite those edits. If a generated module must be patched for a
-quick experiment, clearly identify it as temporary.
+Do not edit generated files in `physiojepa/` alone — a later `nbdev_prepare`
+will overwrite those edits. If a generated module must be patched for a quick
+experiment, clearly identify it as temporary.
+
+## Slide generation
+
+Presentation slides are created from Markdown using
+[Marp CLI](https://github.com/marp-team/marp-cli). The source lives in
+`slides/` as `.md` files with Marp frontmatter.
+
+```bash
+module load nodejs/22.9.0
+npx @marp-team/marp-cli slides/physiojepa_results.md -o slides/physiojepa_results.html
+```
+
+Do not commit `node_modules/` or Marp cache directories.
 
 ## Verification
 
-Use checks proportional to the change. Useful baseline checks are:
+Use checks proportional to the change. Useful baseline checks:
 
 ```bash
 python -m pip check
@@ -100,137 +132,100 @@ python -c "import physiojepa, torch; print(torch.__version__)"
 ```
 
 For library changes, import the affected module and run the relevant nbdev
-notebook tests. `nbdev_prepare` may regenerate tracked files, so inspect
-`git status --short` afterward and do not discard unrelated user changes.
-
-There is no conventional `tests/` suite. The notebook suite mostly checks that
-definitions execute rather than asserting detailed behavior. Run it with:
+notebook tests:
 
 ```bash
 MPLCONFIGDIR=/tmp/physiojepa-mpl \
 nbdev_test --path nbs --n_workers 0 --pause 0
 ```
 
-Serial execution is important in restricted environments where nbdev's
-multiprocessing manager cannot create a socket. Add focused tensor-shape and
-numerical checks for changed behavior instead of relying only on notebook
-execution. To check notebook/export drift without modifying the working tree,
-export a temporary copy of the repository and compare its `physiojepa/`
-directory with this checkout.
+Serial execution (`--n_workers 0`) is important in restricted environments
+where nbdev's multiprocessing manager cannot create a socket.
 
-PyTorch reports CUDA availability only when running on a node with a visible
-GPU. A `False` result from `torch.cuda.is_available()` on a login or CPU node
-does not by itself indicate a broken installation.
+Add focused tensor-shape and numerical checks for changed behavior instead of
+relying only on notebook execution.
 
-## Architecture and data flow
+After `nbdev_prepare`, inspect `git status --short` and do not discard
+unrelated user changes.
 
-The standard experiments use 30-minute windows of ABP, ECG lead II, and PLETH
-at 125 Hz. Signals are read lazily from per-record Zarr stores, interpolated,
-optionally filtered, IQR-normalized, and divided into patches.
+PyTorch reports CUDA availability only when running on a GPU node. A `False`
+result from `torch.cuda.is_available()` on a login/CPU node does not indicate
+a broken installation.
 
-The three self-supervised families are:
+## Architecture
 
-- Native JEPA: a context encoder predicts masked latent target-encoder
-  representations; the target encoder is updated by EMA.
-- PatchTST: masked waveform patches are reconstructed from transformer
-  representations.
-- ECG-JEPA: channel/time patch tokens use joint positional embeddings and a
-  masked latent predictor.
+The project trains self-supervised waveform encoders (JEPA, PatchTST, ECG-JEPA)
+and evaluates them on downstream clinical prediction tasks.
 
-Downstream jobs load a pretrained Lightning checkpoint, normally freeze its
-encoder, apply an attentive pooling classifier, and predict one label per
-forecast horizon. FCN jobs train directly from waveforms as supervised
-baselines. Hypotension and shock-index jobs split by subject with
-`StratifiedGroupKFold`; self-supervised jobs use `GroupShuffleSplit`.
+For detailed architecture, data flow, model families, and data splits, see
+[`docs/architecture.md`](docs/architecture.md).
 
-## Known current-tree caveats
+## Known issues
 
-Do not silently work around these when interpreting results. Fix them in the
-source notebooks and add focused regression checks if the user requests
-corrective work.
+Before modifying or interpreting model behavior, read
+[`docs/known_issues.md`](docs/known_issues.md) for currently known
+implementation issues.
 
-- The native JEPA inference/encoder path runs, but the standard unshared-channel
-  masked training path currently fails: `apply_masks` returns from inside its
-  first loop iteration, collapsing the effective batch and causing a predictor
-  shape mismatch.
-- `loss.mape` currently raises `AttributeError` because its `clamp` call is
-  misspelled.
-- `MultiHeadAttention.forward` accepts `mask` but does not pass it to scaled
-  dot-product attention. Code that constructs an attention mask, including the
-  ECG-JEPA channel/time mask, therefore does not currently enforce it.
-- `GeneralTimeSupervised.configure_optimizers` compares `optimizer_type` with
-  lowercase `"adamw"` without normalizing it. The baseline YAML value
-  `"AdamW"` consequently selects `Adam`.
-- The supervised scripts read `training.perform_cv`, but do not use it to run
-  multiple folds. They train only the first nested stratified group split.
+Do not silently work around documented issues. If an issue is fixed, update
+`docs/known_issues.md` as part of the change.
 
-## Jobs, data, and paths
+## Data, outputs, and paths
 
-All derived data and run artifacts for this checkout must be written under:
+All derived data and run artifacts must be written under:
 
 ```text
 /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA
 ```
 
 This includes converted Zarr stores, labels, sample-index caches, manifests,
-checkpoints, prediction tensors, logs, and W&B files. Do not place these
-artifacts in the repository or alongside the read-only source waveforms at
-`/gpfs/data/eh3828lab/datasets/mimic3_waveforms_matched`. Prefer descriptive
-subdirectories such as `zarr/`, `labels/`, `sample_indices/`, `models/`,
-`predictions/`, `logs/`, and `manifests/` beneath the required output root.
+checkpoints, prediction tensors, logs, and W&B files. Prefer descriptive
+subdirectories (`zarr/`, `labels/`, `sample_indices/`, `models/`,
+`predictions/`, `logs/`, `manifests/`).
+
+Do not place artifacts in the repository or alongside the read-only source
+waveforms at `/gpfs/data/eh3828lab/datasets/mimic3_waveforms_matched`.
+
+### GPFS file-count constraints
 
 The containing GPFS fileset has a tight shared file-count quota. Processed
-waveforms must therefore use a containerized layout, normally one chunked
-container per ICU stay, rather than a Zarr `DirectoryStore` that creates one
-filesystem entry per chunk. Suitable implementations include Zarr `ZipStore`
-or chunked HDF5; choose and document the exact backend before conversion and
-update readers accordingly. Write containers atomically and keep a resumable
-manifest. Do not start conversion, labeling, sample generation, or training
-jobs without a separate explicit user request.
+waveforms must use a containerized layout (one chunked container per ICU stay)
+rather than a Zarr `DirectoryStore`. Suitable implementations include Zarr
+`ZipStore` or chunked HDF5. Write containers atomically and keep a resumable
+manifest.
+
+### Training entry points
 
 Training scripts load YAML files by filename relative to the current working
-directory. Run them from their own directory, for example:
+directory. Run them from their own directory:
 
 ```bash
 cd /gpfs/home/dk5565/PhysioJEPA/jobs/jepa
 python train_patch_jepa.py
 ```
 
-Review the associated YAML before launching a job. Its data, model, label, and
-checkpoint paths are relative and must point to locally available resources.
+Review the associated YAML before launching a job. These scripts execute
+substantial setup at import time (reading YAML, discovering data, loading
+checkpoints, creating output directories, constructing an online W&B logger).
+Treat them as entry points, not import-safe modules. Most trainers hard-code
+GPU acceleration, DDP, synchronized batch normalization, persistent data-loader
+workers, and online W&B logging.
 
-The training scripts execute substantial setup at import time, including
-reading their YAML, discovering data, loading checkpoints, creating output
-directories, and constructing an online W&B logger. Treat them as entry points,
-not import-safe modules. Most trainers hard-code GPU acceleration, DDP,
-synchronized batch normalization, persistent data-loader workers, and online
-W&B logging.
+### Sample-cache compatibility
 
-Sample-index dataframes are cached as gzip CSV files under `models_dir` and
+Sample-index DataFrames are cached as gzip CSV files under `models_dir` and
 reused based only on `dataset_filename`. If data, split seeds, channels,
-sampling rules, or label logic changes, use a new descriptive
-`dataset_filename` or explicitly confirm that an existing cache is compatible.
-Do not delete an existing cache without user approval. Check each script rather
-than assuming every YAML key is honored; some configuration fields are
-currently unused or overridden in Python.
+sampling rules, or label logic change, use a new descriptive
+`dataset_filename` or explicitly confirm the cache is compatible. Do not
+delete an existing cache without user approval. Check each script rather than
+assuming every YAML key is honored; some configuration fields are currently
+unused or overridden in Python.
+
+### Data pipeline
 
 The cluster-ready data-preparation pipeline is documented in
-`jobs/data_processing/README.md`. It uses separately submitted Slurm stages to
-build a manifest, convert array-task slices to one Zarr `ZipStore` per stay,
-validate conversion reports, extract minute-level labels in an array, and
-merge label shards. The submission helper never chains stages. The older
-`jobs/convert_to_zarr.py` and
-`jobs/label_processing/create_hypotension_outcome_df.py` use directory stores
-or workstation-style multiprocessing and are not suitable for this fileset.
-
-After minute-label extraction,
-`create_hypotension_shock_labels.ipynb` requires records at least two hours
-long and creates event labels from five consecutive positive minutes.
-Supervised jobs then turn those events into preceding waveform/forecast
-samples, cache the sample tables, train, checkpoint, and save validation/test
-prediction tensors. Current training readers still assume directory-backed
-Zarr paths and must be updated to open `ZipStore` containers before training
-against the cluster-ready output.
+`jobs/data_processing/README.md`. Current training readers still assume
+directory-backed Zarr paths and must be updated to open `ZipStore` containers
+before training against the cluster-ready output.
 
 The repository does not include MIMIC waveform data, derived Zarr stores,
 outcome-label files, or pretrained checkpoints. Do not launch training or data
@@ -238,8 +233,17 @@ conversion unless the required inputs are present. Do not download restricted
 clinical data or authenticate to Weights & Biases on the user's behalf without
 an explicit request.
 
+## Slurm and expensive operations
+
 Training is GPU- and resource-intensive. Do not run full training on a login
-node; use the cluster's scheduled GPU resources when the user requests a run.
+node; use the cluster's scheduled GPU resources.
+
+You may create or modify Slurm scripts when requested, but **submitting**
+(`sbatch`), **cancelling** (`scancel`), requeuing, or otherwise changing
+running or queued jobs requires explicit user authorization.
+
+Do not start data conversion, labeling, sample generation, or training jobs
+without a separate explicit user request.
 
 ## Working-tree safety
 
@@ -249,3 +253,46 @@ node; use the cluster's scheduled GPU resources when the user requests a run.
 - Keep datasets, cached sample tables, checkpoints, W&B runs, prediction
   tensors, model outputs, and credentials out of Git.
 - Do not edit shell startup files merely to activate this environment.
+
+## Experimental integrity
+
+- Never report a metric, result, completed job, or successful experiment unless
+  it was actually observed in an output, log, artifact, or existing documentation.
+- Clearly distinguish proposed experiments, implemented experiments, submitted
+  jobs, running jobs, completed jobs, failed jobs, and validated results.
+- Record the checkpoint, configuration, and data split associated with reported
+  results when known.
+- Do not overwrite prior experimental outputs unless explicitly requested.
+
+## Documentation and progress policy
+
+```text
+PROGRESS.md = concise chronological project log / dashboard
+docs/*.md   = detailed topic-specific project knowledge
+```
+
+`PROGRESS.md` should be short: what changed, what's running, what's next,
+with links to `docs/` for details. Do not put methodology, results tables,
+full commands, or long analyses there.
+
+`docs/` files group related work by workstream (`snake_case` filenames).
+Update existing documents rather than creating duplicates.
+
+At the top of `PROGRESS.md`, maintain a small project-status section with
+current priorities and active jobs. Keep it short and current. Remove completed
+or obsolete items rather than allowing it to grow indefinitely.
+
+### Update documentation as part of meaningful work
+
+At the end of a material work session:
+
+1. Update the relevant `docs/*.md` file with important technical details.
+2. Add a concise entry to today's section in `PROGRESS.md`.
+3. Update `Current priorities` if priorities changed.
+4. Update `Active jobs` if jobs were launched, completed, failed, or replaced.
+5. Add clear next-step checkboxes.
+
+Update documentation only for work that materially changes project state,
+implementation, experimental results, understanding, or next steps. Do not log
+routine inspection, trivial commands, formatting-only changes, or dead-end
+exploration unless it reveals something important.

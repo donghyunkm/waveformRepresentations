@@ -1,0 +1,64 @@
+# Train classifier head from cached JEPA embeddings.
+
+run_config:
+  wandb_project: "Hypotension JEPA Prediction"
+  name: "jepa_cached_attentive_probe_v1"
+  random_state: 16
+  precision: "bf16-mixed"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-08-10-jepa-cached-probe-v1"
+  checkpoint_interval_minutes: 15
+
+paths:
+  embeddings_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/embeddings/jepa_native_hypotension"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/jepa_native_hypotension_probe_cached"
+  predictions_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/predictions/jepa_native_hypotension_probe_cached"
+
+lp_head:
+  num_heads: 4
+  mlp_ratio: 4.0
+  depth: 1
+  init_std: 0.02
+  qkv_bias: true
+  complete_block: true
+  affine: false
+
+augmentations:
+  use_transforms: true
+
+training:
+  batch_size: 128
+  epochs: 20
+  n_gpus: 1
+  num_workers: 4
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  use_gradient_clipping: true
+  mixup: true
+  mixup_alpha: 0.2
+  use_class_weights: false
+  log_every_n_steps: 50
+  num_sanity_val_steps: 2
+
+optimizer:
+  learning_rate: 0.000001
+  weight_decay: 0.0001
+  use_weight_decay_scheduler: false
+  final_weight_decay: 0.4
+  optimizer_type: "AdamW"
+
+scheduler:
+  scheduler_type: "OneCycle"
+  max_lr: 0.01
+  div_factor: 25
+  final_div_factor: 10000
+  pct_start: 0.3
+  anneal_strategy: "cos"
+
+evaluation:
+  run_predictions: true

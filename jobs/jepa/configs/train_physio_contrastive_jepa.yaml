@@ -1,0 +1,131 @@
+# Physiological-Distance Contrastive JEPA
+# Combines JEPA masked prediction with continuous physiological-distance contrastive loss.
+# Positives: cross-patient windows within epsilon physiological distance.
+# Negatives: cross-patient windows beyond delta physiological distance.
+# Same-patient pairs and margin (epsilon <= d <= delta) pairs are ignored.
+
+run_config:
+  model_type: "physio_contrastive_jepa"
+  wandb_project: "Bedside Hypotension JEPA"
+  model_run: "physio-contrastive-jepa-v1"
+  name: "physio_contrastive_jepa_ABP_II_PLETH_v1"
+  random_state: 12
+  precision: "32-true"
+  deterministic: true
+  wandb_offline: true
+
+resume:
+  enabled: true
+  run_subdir: "2026-08-11-physio-contrastive-jepa-v1"
+  checkpoint_interval_minutes: 30
+
+paths:
+  containers_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/containers"
+  waveform_manifest_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/waveform_manifest.csv"
+  downstream_subject_split_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/hypotension_subject_split_fixed_v1.csv"
+  pretraining_manifest_path: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/manifests/jepa_native_paper_leakage_safe_v1.csv"
+  sample_cache_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/sample_indices/jepa_native_paper_leakage_safe_v1"
+  models_dir: "/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/models/physio_contrastive_jepa"
+  dataset_filename: "zipstore_ABP_II_PLETH_125Hz_1800sec_stride1800_jepa_leakage_safe_v1"
+
+split:
+  exclude_downstream_splits: ["val", "test"]
+  validation_fraction: 0.05
+
+sample_preparation:
+  workers: 16
+
+dataset:
+  channels: ["ABP", "II", "PLETH"]
+  frequency: 125
+  patch_seconds: 1
+  overlap: 0.0
+  sample_seq_len_seconds: 1800
+  sample_stride_seconds: 1800
+  constant_nan_tolerance: 0.2
+  normalize_signals: true
+  require_all_channels: true
+
+encoder:
+  d_model: 512
+  nhead: 8
+  num_layers: 3
+  pe_type: "rotary"
+  mlp_ratio: 4.0
+  use_tst_block: true
+  shared_embedding: false
+  qkv_bias: true
+  qk_scale: null
+  drop_rate: 0.1
+  attn_drop_rate: 0.0
+  jepa: true
+  tokenizer_type: "simple"
+  tokenizer_kwargs:
+    depth: 1
+    bottleneck_channels: 112
+    residual: true
+    kernel_size: 40
+    bottleneck: true
+
+predictor:
+  predictor_embed_dim: 256
+  nhead: 4
+  num_layers: 2
+  pe_type: "rotary"
+  mlp_ratio: 4.0
+  use_tst_block: true
+  qkv_bias: true
+  qk_scale: null
+  drop_rate: 0.0
+  attn_drop_rate: 0.0
+  c_in_mask_tokens: 3
+
+# Contrastive loss hyperparameters
+contrastive:
+  # Distance thresholds (in normalized physiological space)
+  epsilon: 0.5          # d < epsilon → positive pair
+  delta: 1.5            # d > delta → negative pair
+                        # epsilon <= d <= delta → ignored (margin)
+  # Temperature for InfoNCE softmax
+  tau: 0.1              # lower = sharper distribution
+  # Weight of contrastive loss in total loss
+  lambda_contrast: 0.1  # L_total = L_JEPA + lambda_contrast * L_contrastive
+  # Normalization scales for physiological distance
+  sigma_hr: 15.0        # HR scale (roughly 1 std of population HR in bpm)
+  sigma_map: 12.0       # MAP scale (roughly 1 std of population MAP in mmHg)
+  # Projection head architecture
+  projection_dim: 128
+  projection_hidden_dim: 512
+
+training:
+  n_gpus: 1
+  batch_size: 64
+  epochs: 100
+  num_workers: 14
+  accumulate_grad_batches: 2
+  target_mask_range: [0.1, 0.3]
+  context_mask_range: [0.1, 0.4]
+  mask_block_range: [1, 1]
+  ema_decay: 0.996
+  val_check_interval: 1.0
+  use_gradient_clipping: true
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  loss_fxn: "mse"
+  log_every_n_steps: 10
+  num_sanity_val_steps: 2
+
+optimizer:
+  learning_rate: 0.00001
+  weight_decay: 0.04
+  use_weight_decay_scheduler: true
+  final_weight_decay: 0.4
+  optimizer_type: "adamw"
+
+scheduler:
+  scheduler_type: "onecycle"
+  max_lr: 0.0006
+  div_factor: 25
+  final_div_factor: 100
+  pct_start: 0.3
+  anneal_strategy: "cos"

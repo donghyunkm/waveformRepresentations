@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=physiojepa-jepa-probe-full
-#SBATCH --partition=a100_long
-#SBATCH --time=14-00:00:00
+#SBATCH --partition=a100_short
+#SBATCH --time=3-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:a100:1
 #SBATCH --requeue
 #SBATCH --signal=B:SIGUSR1@180
-#SBATCH --exclude=a100-4030,a100-4031,a100-4032,a100-4033,a100-4034,a100-4035,a100-4037,a100-4039,a100-4040,a100-4041,a100-4042,a100-4044,a100-4045
+#SBATCH --exclude=a100-4003,a100-4029
 #SBATCH --output=/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/%x-%j.out
 #SBATCH --error=/gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/%x-%j.err
 
