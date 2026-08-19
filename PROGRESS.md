@@ -1,221 +1,151 @@
-# PhysioJEPA progress and implementation review
+# Progress
 
-## Current training status
+Concise daily project log. Detailed notes live in [`docs/`](docs/).
 
-- A native JEPA run and a self-supervised PatchTST run are active on the cluster.
-- The PatchTST run is using the one-GPU cluster entry point and the leakage-safe
-  manifest/sample-index pipeline.
-- The latest observed PatchTST log was healthy (epoch 17 in progress, with no
-  traceback). It had approximately 272,068 training samples and 14,540
-  validation samples.
-- Train/validation subject overlap was zero; downstream-excluded subject overlap
-  was zero; there were no duplicate samples; and sample lengths were valid.
-- The current cache contains approximately 286,608 samples from 4,689 stays and
-  3,035 subjects. The paper reports approximately 356,903 segments from 4,282
-  stays and 2,631 patients, so the data inventory is not identical to the paper.
-- The observed checkpoint was
-  `resume-epoch=17-step=145799.ckpt`; its configuration fingerprint matched the
-  active run. GPU memory remained below the requested allocation.
+## Current priorities
 
-## Paper alignment
+- [ ] Monitor supervised PatchTST vasopressor-free training (job 26576169, a100_short)
+- [ ] Monitor JEPA physio-contrastive pretraining (job 26497397)
+- [ ] Analyze vasopressor-free PatchTST results when job completes
+- [ ] Bootstrap CIs for JEPA vs PatchTST probe metrics
 
-The paper uses 30-minute, non-overlapping windows at 125 Hz with ABP, ECG lead
-II, and PPG/PLETH. It excludes signals with at least 20% constant or null
-values, interpolates nulls, IQR-normalizes the signals, and divides them into
-patches.
+## Active jobs
 
-For native PhysioJEPA, the implementation and YAML match the main architectural
-specification: three encoder layers, eight attention heads, model width 512,
-feed-forward width 2048, RoPE, a two-layer predictor with width 256 and four
-heads, target masking of 10--30%, context masking of 10--40%, EMA target updates,
-MSE embedding loss, 100 epochs, AdamW, and OneCycle scheduling.
-
-The current data split is stricter than the paper's stated 95/5 pretraining
-split because subjects reserved for downstream validation/test are removed
-before pretraining. This is a protocol difference, not an accidental overlap.
-There is also a minor boundary difference in the signal-quality check: the
-current code accepts exactly 20% constant samples, while the paper says 20% or
-more should be excluded.
-
-## PatchTST: paper versus released repository
-
-The paper's Appendix A.1 says that PatchTST uses the same tokenization,
-positional embeddings, and encoder dimensions as PhysioJEPA. It specifies
-masking before tokenization, 10--30% target masking, reconstruction of the
-masked patches with a per-channel linear head, and MSE on the masked patches.
-
-The released [PhysioJEPA repository](https://github.com/benmfox/PhysioJEPA) does
-not implement the loss exactly as described in that appendix. In the original
-[PatchTST module](https://raw.githubusercontent.com/benmfox/PhysioJEPA/main/physiojepa/patchtst.py):
-
-1. The input is copied to an unmasked `Y_true` target.
-2. Patches are masked only when `self.training` is true.
-3. The model reconstructs the complete target tensor.
-4. The training step computes MSE over the complete reconstruction, with no mask
-   selecting only masked positions.
-5. Validation runs in evaluation mode, so masking is bypassed, and full-signal
-   reconstruction MSE is measured.
-
-Therefore, the released repository performs a denoising-autoencoder-style
-objective: visible and masked patches both contribute to the gradient. At a
-10--30% mask ratio, roughly 70--90% of the reconstruction terms are visible
-patches. This can affect the learned representation and the checkpoint selected
-by validation; it should not be described as a masked-only PatchTST objective.
-
-The current cluster PatchTST path uses the same model and loss behavior as the
-released code. It is therefore faithful to the GitHub implementation, but not
-to the paper's stated masked-only loss. The current cluster YAML uses
-`mask_ratio: [0.1, 0.3]`, which is more consistent with the paper. The original
-[PatchTST YAML](https://raw.githubusercontent.com/benmfox/PhysioJEPA/main/jobs/patchtst/train_patchtst.yaml)
-uses `[0.1, 0.4]`.
-
-Other current-path differences from the original training entry point include
-the cluster-safe data backend and manifest, subject-leakage protections, and
-resume/checkpoint handling. The original [training script](https://raw.githubusercontent.com/benmfox/PhysioJEPA/main/jobs/patchtst/train_patchtst.py)
-uses a 95/5 group split and the original local data-loading setup.
-
-## Interpretation
-
-The answer to "is this how the original code does it?" is yes: the original
-repository masks the training input but computes reconstruction loss over all
-patches, and validates without masking. The answer to "is this exactly what the
-paper says?" is no: the paper describes loss restricted to masked patches.
-Matching the repository and matching the paper are therefore different targets.
-
-No source code was changed during this review; this file records the current
-status and conclusions only.
+| Job ID | Name | Partition | Status | Purpose |
+|--------|------|-----------|--------|---------|
+| 26576169 | physiojepa-sptst-nopressor | a100_short | Running (a100-4007) | Supervised PatchTST on vasopressor-free cohort |
+| 26497397 | physiojepa-physio-contrastive | gl40s_short | Running (gl40s-8008) | Contrastive JEPA pretraining |
 
 ---
 
-# Progress Summary — 2026-08-06 (Session 2)
+## 2026-08-18
 
-## 1. What Changed This Session
+- **Vasopressor-free cohort created** (stay-level exclusion): Queried MIMIC INPUTEVENTS_MV/CV for 19 vasopressor item IDs, matched 2,831 waveform stays to vasopressor ICU stays via temporal overlap (±1h tolerance). Remaining cohort: 1,460 subjects, 982k samples, 1.94% prevalence (vs original 4.3%). Re-split with corrected stratified group 10-fold (seed=16) for balanced prevalence across train/val/test. [Details](docs/architecture.md#vasopressor-free-cohort-stay-level-exclusion)
+  - Scripts: `jobs/data_processing/scripts/exclude_vasopressor_stays.py`, `resplit_vasopressor_free.py`
+  - Outputs: `manifests/hypotension_subject_split_vasopressor_free_stays_v1.csv`, `labels/hypotension_labels_vasopressor_free_stays_v1.csv.gz`
+- **Supervised PatchTST vasopressor-free training**: Debugged and fixed manifest validation failure. 4 subjects (3 train, 1 val) have no valid 30-min windows because required channels are entirely NaN. Relaxed strict check to warning; training now running (job 26576169, a100-4007). [Details](docs/vasopressor_free_cohort.md#failure-analysis-and-fix-2026-08-18)
+  - Failed jobs: 26574888 (manifest RuntimeError), 26575971 (bad GPU node a100-4026)
+  - Fix: `fcn_baseline_hypotension.py` (warning instead of error for missing subjects), YAML `strict_cohort_match: false`, sbatch exclude list updated
 
-- **Implemented multi-scale PatchTST tokenizer** — a hierarchical dual-path
-  tokenizer that adds a fine-grained 200ms local encoder (beat-level) fused
-  with the existing 1-second coarse tokenizer via a learnable gate.
-- Modified notebooks:
-  - `nbs/18_tokenizers.ipynb`: Added `MultiScaleTokenizer` and `_LocalTSTBlock`
-    classes; updated imports to include `MultiHeadAttention` and
-    `get_activation_fn` from layers.
-  - `nbs/17_patchtst.ipynb`: Added `tokenizer_type='multiscale'` option to
-    `PatchTFTSimple`; updated import to include `MultiScaleTokenizer`.
-- Ran `nbdev_prepare` — regenerated `physiojepa/tokenizers.py` and
-  `physiojepa/patchtst.py` with the new classes.
-- Created config:
-  `jobs/baselines/configs/supervised_patchtst_multiscale_hypotension_full.yaml`
-- Created sbatch:
-  `jobs/baselines/slurm/supervised_patchtst_multiscale_hypotension_full.sbatch`
-  (a100_short, 3 days, 1×A100, 16 CPUs, 128G RAM).
-- Submitted job **26165312** (`physiojepa-sptst-multiscale`).
+### Next steps
 
-## 2. What Is Working
+- [ ] Monitor job 26576169; confirm it produces first checkpoint (~30 min)
+- [ ] Compare vasopressor-free PatchTST AUROC/AP to full-cohort result (0.8688/0.2766)
+- [ ] If successful, create vasopressor-free JEPA pretraining + downstream probe configs
+- [ ] Consider whether lower prevalence (1.94% vs 4.3%) warrants adjusted class weights or focal loss gamma
 
-- **Multi-scale supervised PatchTST** (job 26165312): Just started, running on
-  a100-4013. Uses the same fixed subject split, sample caches, and training
-  config as the completed full supervised PatchTST. Adds 275K params (+2.9%)
-  via the fine-grained local encoder. Smoke-tested: correct output shapes in
-  both supervised and self-supervised modes; gradient flow verified through
-  both coarse and fine paths.
-- **PatchTST self-supervised pretraining** (job 26126590): Running ~25 hours,
-  on a100-4004. Previously at epoch 16, val_loss ~0.009.
-- **JEPA 1-GPU** (job 26107011): Running ~44 hours on a100-4013. Previously in
-  epoch 0, loss trending down.
-- **Supervised PatchTST full** (completed earlier): AUROC 0.8688, AP 0.2766.
-- **FCN baseline** (completed earlier): AUROC 0.7903, AP 0.1911.
+---
 
-## 3. What Remains Unfinished
+## 2026-08-17
 
-- Multi-scale PatchTST training just started — no metrics yet.
-- JEPA pretraining still early (was in epoch 0 after ~20 hours).
-- PatchTST self-supervised pretraining convergence status unknown (need to
-  check current epoch/loss).
-- No downstream classification launched with pretrained encoders yet.
-- InceptionTime baseline cancelled; needs architectural rework.
-- Cross-channel and compact260K PatchTST runs had checkpoints but no completed
-  test-metric artifacts.
+- **Slide deck improvements** (`slides/physiojepa_results.md`): Combined overlapping JEPA slides into one; added PatchTST architecture slide (emphasizing channel independence, no cross-channel attention); improved Key Takeaways, Limitations, and Next Steps with specific metrics and framing; clarified K-Means PCA pipeline; added font-size classes for overflow control. [Details](docs/slides.md)
+- Created `docs/slides.md` documenting slide structure, generation commands, and content decisions.
 
-## 4. Known Bugs
+### Next steps
 
-Per AGENTS.md (unchanged this session):
+- [ ] Monitor JEPA d64 downstream evaluation jobs (2 running on gl40s_short)
+- [ ] Request `qos_a100_short` from cluster admins
+- [ ] Analyze d64 downstream results when remaining jobs complete
+- [ ] Bootstrap CIs for JEPA vs PatchTST probe metrics
+- [ ] PatchTST slide still slightly overflows at `tiny` (17px) — may need content trim or split
 
-- Native JEPA `apply_masks` returns inside its first loop iteration — collapses
-  effective batch (masked training path broken for unshared-channel mode).
-- `loss.mape` raises `AttributeError` — misspelled `clamp` call.
-- `MultiHeadAttention.forward` accepts `mask` but doesn't pass it to scaled
-  dot-product attention.
-- `GeneralTimeSupervised.configure_optimizers` compares `optimizer_type` with
-  lowercase `"adamw"` without normalizing — YAML value `"AdamW"` selects
-  `Adam` instead.
-- Supervised scripts don't use `training.perform_cv` to run multiple folds.
+---
 
-## 5. Design Note: Patch Overlap
+## 2026-08-16
 
-Both the original supervised PatchTST and the new multi-scale variant use
-non-overlapping patches throughout:
+- **JEPA d64 medfeat probe completed** (job 26487639, 17 min on L40S): Mean R²=**0.26** (vs d512=0.51). PLETH morphology preserved (0.94); ABP hemodynamics severely degraded by 8× compression. [Details](docs/downstream_feature_prediction.md)
+- **JEPA d64 hypotension probe running** (job 26487623, gl40s-8005): Epoch 0 val_auroc=**0.812**, val_auprc=0.205. Training epoch 1 at ~4.3 it/s. [Details](docs/downstream_hypotension_prediction.md)
+- **JEPA d64 homogeneity sweep running** (job 26487661, gl40s-8006): Embedding extraction phase. [Details](docs/representation_analysis.md)
+- **JEPA d64 pretraining completed** (job 26381948): 100/100 epochs in 2d 12h on A100. Best val_loss=**0.18978** at epoch 40. Unlike full JEPA (diverged at epoch 13), d64 trained stably through all epochs. [Details](docs/pretraining.md)
+- **Cluster QOS policy change**: All `a100_*`, `gpu4_*`, `gpu8_*` partitions now require their own QOS (e.g. `qos_a100_short`). User account only has `normal` QOS, restricting GPU access to `gl40s_*` (L40S) partitions only. Previous jobs ran before this restriction was enforced. [Details](docs/infrastructure.md)
+- Created and submitted 3 downstream evaluation jobs for JEPA d64:
+  1. **Attentive hypotension probe** — same config as full JEPA probe, d64 encoder. [Details](docs/downstream_hypotension_prediction.md)
+  2. **Mean-pooled Ridge medical feature probe** — 15 physiological features, 10k windows. [Details](docs/downstream_feature_prediction.md)
+  3. **K-Means homogeneity sweep** — k=2–50, patient/hemo/hypo alignment. [Details](docs/representation_analysis.md)
+- All 3 jobs queued on `gl40s_short` (0 idle nodes currently; waiting on priority).
 
-- Coarse tokenizer: `kernel_size=125, stride=125` (1-second, no overlap).
-- Fine tokenizer (multi-scale only): `kernel_size=25, stride=25` (200ms, no
-  overlap).
+### Next steps
 
-Overlapping patches were considered but not implemented because:
+- [ ] Request QOS access for A100 partition from cluster admins.
+- [ ] When d64 probe completes, compare final AUROC/AP to full JEPA (0.843/0.265).
+- [ ] When d64 homogeneity sweep completes, compare patient vs hemo vs hypo alignment to d512.
+- [ ] If d64 approaches full JEPA downstream → strong efficiency argument for the paper.
+- [ ] If d64 underperforms → quantify the capacity-performance tradeoff across all 3 evaluation axes.
+- [ ] Bootstrap CIs on existing JEPA/PatchTST hypotension AUROC/AP.
 
-1. At the coarse level (1s), overlap would expand the sequence from 1,800 to
-   ~3,600 tokens — roughly quadrupling attention cost — for minimal benefit,
-   since the transformer's job at this scale is modeling multi-minute trends
-   where beat-boundary artifacts are irrelevant.
-2. At the fine level (200ms), the local transformer only attends over 5 tokens
-   per group. Overlap would increase this to 7–9 tokens, which is
-   computationally cheap but unnecessary: the dual-path fusion already
-   mitigates boundary effects because the coarse Conv1d kernel sees all 125
-   samples in a single convolution regardless of where fine sub-patch
-   boundaries fall.
-3. RoPE positional encoding assumes each position index maps to a distinct
-   temporal location. Overlap introduces ambiguity where adjacent tokens share
-   most of their temporal extent.
-4. Adjacent overlapping patches are largely redundant — the transformer wastes
-   capacity re-learning that neighboring tokens are similar.
+---
 
-If a future ablation shows boundary effects in the fine path, a simple change
-to `fine_stride=13` (50% overlap) in the `MultiScaleTokenizer` would test this
-at negligible compute cost, since local attention remains on fewer than 10
-tokens.
+## 2026-08-14
 
-## 6. Commands to Continue
+- Hemo cluster mean-pooled linear probe (precomputed embeddings, 22k test windows): JEPA AUROC **0.524**, PatchTST **0.532** — both at chance. Confirms attentive probe failure is not architecture-specific. [Details](docs/downstream_cluster_prediction.md)
+- Verified label alignment chain: embeddings ↔ test CSV ↔ hemo labels all positionally aligned (100% patient ID match). Median temporal offset to icuDataExtraction: 38s.
+- Created `probe_hemo_clusters.py` (full pipeline) and `probe_hemo_clusters_precomputed.py` (uses cached embeddings, runs in seconds on CPU).
+- JEPA d64 pretraining healthy: epoch 32/100, val_loss 0.203 (down from 0.51 at epoch 8). On track to finish ~Aug 15 evening.
+- Refactored `AGENTS.md`: moved volatile knowledge to `docs/known_issues.md` and `docs/architecture.md`, added experimental integrity and workflow sections.
+- Trimmed `PROGRESS.md` from ~230 to ~90 lines.
 
-### Check running jobs
-```bash
-squeue -u dk5565
-```
+- Job `26417288` (hemo cluster full probe) **timed out** after 4h on `gl40s_dev`. Waveform cache written (8.4 GB, 10k windows). Did not reach raw stats or encoder inference. Resubmit with `--skip-extraction` + longer wall-time if raw stats baseline is needed.
 
-### Check multi-scale PatchTST logs
-```bash
-tail -20 /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/physiojepa-sptst-multiscale-26165312.out
-```
+### Next steps
 
-### Check PatchTST pretraining
-```bash
-tail -2 /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/physiojepa-patchtst-1gpu-26126590.out | tr '\r' '\n' | grep -oP 'val_loss_epoch=[\d.]+' | tail -1
-```
+- [ ] Identify mixed-label patients for within-patient clustering.
+- [ ] Bootstrap CIs on JEPA/PatchTST hypotension AUROC/AP.
+- [ ] Monitor JEPA d64 completion (~Aug 15 evening).
+- [ ] (Optional) Resubmit raw stats baseline with longer wall-time or vectorized computation.
 
-### Check JEPA pretraining
-```bash
-tail -2 /gpfs/data/eh3828lab/derived_datasets/baselines/PhysioJEPA/logs/slurm/physiojepa-jepa-1gpu-short-26107011.out | tr '\r' '\n' | grep -oP 'Epoch \d+|train_loss_step=[\d.]+' | tail -2
-```
+---
 
-### Activate environment
-```bash
-source /gpfs/share/apps/anaconda3/gpu/2025.06/etc/profile.d/conda.sh
-conda activate physiojepa
-cd /gpfs/home/dk5565/PhysioJEPA
-```
+## 2026-08-13
 
-### Resubmit multi-scale job if preempted/expired
-```bash
-sbatch jobs/baselines/slurm/supervised_patchtst_multiscale_hypotension_full.sbatch
-```
+- PatchTST frozen attentive hypotension inference complete: test AUROC/AP **0.8296/0.2344**. [Details](docs/downstream_hypotension_prediction.md)
+- JEPA frozen attentive hypotension confirmed: test AUROC/AP **0.8431/0.2653**.
+- Single-patient clustering (p072908): ARI 0.247 at k=5; all-negative labels made hypotension metrics undefined. [Details](docs/representation_analysis.md)
+- JEPA d64 pretraining started (job 26381948). Updated slides.
 
-### Cancel a job
-```bash
-scancel <JOBID>
-```
+### Known bugs/caveats
+
+- `train_medical_features_fixed.py` logs only aggregate R², not per-feature.
+- PatchTST inference ~0.22 it/s vs JEPA ~1.4 it/s; cause unresolved.
+- Upstream code bugs documented in [`docs/known_issues.md`](docs/known_issues.md).
+
+---
+
+## 2026-08-12
+
+- JEPA attentive probe reached val_auroc=**0.865** at epoch 15. [Details](docs/downstream_hypotension_prediction.md)
+- Created hemo cluster probe (7-class) and medical feature probe (15 features). [Details](docs/downstream_cluster_prediction.md), [Details](docs/downstream_feature_prediction.md)
+- Representation analysis: intrinsic dim ~7–9D, K-Means dominated by patient identity. [Details](docs/representation_analysis.md)
+- JEPA medfeat probe epoch 0: aggregate val_R²=0.639 (surpasses Ridge baseline 0.51). [Details](docs/downstream_feature_prediction.md)
+- Fixed timestamp alignment bug, checkpoint fingerprint mismatches, OOM resubmissions.
+
+---
+
+## 2026-08-11
+
+- Implemented physio-contrastive JEPA. [Details](docs/contrastive_learning.md)
+- CKA analysis confirms patient fingerprint is location, not structure. [Details](docs/representation_analysis.md)
+- Linear probe generalizability: all cross-patient results at chance (mean-pooled).
+
+---
+
+## 2026-08-10
+
+- Local SSD caching pipeline (8.5x speedup). [Details](docs/infrastructure.md)
+- Representation analysis suite. [Details](docs/representation_analysis.md)
+- Medical feature probing (Ridge, mean-pooled). [Details](docs/medical_feature_probing.md)
+- Key finding: embeddings are patient fingerprints; within-patient signal exists.
+
+---
+
+## 2026-08-07
+
+- Pretraining loss analysis. [Details](docs/pretraining.md)
+- Downstream attentive probe configs created.
+- Embedding visualization (UMAP, t-SNE). [Details](docs/representation_analysis.md)
+
+---
+
+## 2026-08-06
+
+- Multi-scale PatchTST tokenizer. [Details](docs/downstream_hypotension_prediction.md)
+- JEPA and PatchTST pretraining monitored. [Details](docs/pretraining.md)
